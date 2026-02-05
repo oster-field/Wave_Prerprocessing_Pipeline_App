@@ -888,7 +888,7 @@ class VisualizationWindow(QMainWindow):
 
 
 def main():
-    """Запуск приложения"""
+    """Запуск приложения основного"""
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 

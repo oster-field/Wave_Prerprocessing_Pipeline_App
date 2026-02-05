@@ -1,0 +1,89 @@
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+
+.venv/
+venv/
+env/
+ENV/
+.env/
+env.bak/
+venv.bak/
+
+
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+wheelhouse/
+.installed.cfg
+MANIFEST
+
+
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.old
+*.orig
+*.env
+.env.*
+secrets.*
+credentials.json
+local_settings.py
+
+
+.ipynb_checkpoints/
+
+
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+*.so
+*.pyd
+*.dll
+
+
+ *.ogg
+ *.m4a
+ *.npy
+ *.npz
+ *.h5
+ *.hdf5
+ *.mat
+ *.csv
+ /DataTXT/
+ /output/
+
+
+node_modules/
+npm-debug.log
+yarn-error.log
+
+
+.vagrant/
