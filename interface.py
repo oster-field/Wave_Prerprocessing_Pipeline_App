@@ -110,8 +110,9 @@ class ProcessingThread(QThread):
             # Step 8: Save to CSV
             self.progress.emit(90, "Saving to CSV file...")
 
-            # Get output path - create Output folder
-            output_folder = Path(self.data_files[0]).parent / "Output"
+            # Get output path - Output folder next to the script
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            output_folder = script_dir / "Output"
             output_folder.mkdir(exist_ok=True)  # Create if doesn't exist
             output_file = output_folder / "Step1_TXTtoCSV.csv"
 
@@ -191,23 +192,23 @@ class ProcessingThread(QThread):
         }
 
     def read_data_file(self, file_path):
-        """Read data from .dat/.txt/.npy file"""
+        """Read data from .dat/.txt/.npy file - optimized version"""
         file_ext = Path(file_path).suffix.lower()
 
         if file_ext == '.npy':
             return np.load(file_path)
         elif file_ext in ['.dat', '.txt']:
-            # Read as text first to handle comma decimal separator
+            # Optimized reading - use numpy's faster methods
             try:
-                # Try loading directly (if using dot separator)
-                return np.loadtxt(file_path)
+                # Try direct load with comma as decimal separator
+                return np.genfromtxt(file_path, delimiter='\n', encoding='utf-8')
             except:
-                # If that fails, replace commas with dots
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    data_text = f.read().replace(',', '.')
-                # Parse the numbers
-                values = [float(x.strip()) for x in data_text.split() if x.strip()]
-                return np.array(values)
+                # Fallback: read and replace commas
+                with open(file_path, 'rb') as f:
+                    content = f.read().decode('utf-8', errors='ignore')
+                content = content.replace(',', '.')
+                # Use fromstring for speed
+                return np.fromstring(content, sep='\n')
         else:
             raise ValueError(f"Unsupported file format: {file_ext}")
 
@@ -345,7 +346,61 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.info_file = None
         self.data_files = []
+        self.check_existing_data()
+
+    def check_existing_data(self):
+        """Check if processed data already exists"""
+        # Look for Output/Step1_TXTtoCSV.csv in current directory
+        current_dir = Path.cwd()
+        output_file = current_dir / "Output" / "Step1_TXTtoCSV.csv"
+
+        if output_file.exists():
+            # Ask user if they want to continue from previous session
+            reply = QMessageBox.question(
+                None,
+                "Previous Session Found",
+                f"Found existing processed data:\n{output_file}\n\n"
+                "Do you want to continue from previous session?\n\n"
+                "Yes - Load existing data and show visualization\n"
+                "No - Start fresh (will overwrite)",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                # Load existing data and go directly to visualization
+                try:
+                    df = pd.read_csv(output_file, comment='#')
+
+                    # Read metadata from file
+                    with open(output_file, 'r') as f:
+                        for line in f:
+                            if line.startswith('# Sensor frequency:'):
+                                freq = int(line.split(':')[1].strip().split()[0])
+                                df.attrs['sensor_frequency_hz'] = freq
+                            elif line.startswith('# Recording start:'):
+                                df.attrs['recording_start'] = line.split(':', 1)[1].strip()
+                            elif line.startswith('# Recording end:'):
+                                df.attrs['recording_end'] = line.split(':', 1)[1].strip()
+
+                    # Show visualization directly
+                    self.show_visualization_directly(df)
+                    return
+                except Exception as e:
+                    QMessageBox.warning(
+                        None,
+                        "Load Error",
+                        f"Could not load existing file:\n{str(e)}\n\nStarting fresh."
+                    )
+
+        # If no existing data or user chose to start fresh, show normal UI
         self.init_ui()
+
+    def show_visualization_directly(self, df):
+        """Show visualization window directly without main window"""
+        self.viz_window = VisualizationWindow(df)
+        self.viz_window.show()
+        # Don't show the main window
+        self.hide()
 
     def init_ui(self):
         """Инициализация интерфейса"""
@@ -657,8 +712,29 @@ class MainWindow(QMainWindow):
 
         if success and result_df is not None:
             # Get output file path
-            output_folder = Path(self.data_files[0]).parent / "Output"
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            output_folder = script_dir / "Output"
             output_file = output_folder / "Step1_TXTtoCSV.csv"
+            viz_cache_file = output_folder / "Step1_Visualization.csv"
+
+            # Create visualization cache (subsampled data)
+            viz_data = result_df.copy()
+            if len(viz_data) > 10000:
+                step = len(viz_data) // 10000
+                viz_data = viz_data.iloc[::step].reset_index(drop=True)
+
+            # Save cache
+            with open(viz_cache_file, 'w', encoding='utf-8') as f:
+                f.write("# VISUALIZATION CACHE - Subsampled data for fast plotting\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Sensor frequency: {result_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz\n")
+                f.write(f"# Recording start: {result_df.attrs.get('recording_start', 'N/A')}\n")
+                f.write(f"# Recording end: {result_df.attrs.get('recording_end', 'N/A')}\n")
+                f.write(f"# Sampled points: {len(viz_data)}\n")
+                f.write(f"# Original points: {len(result_df)}\n")
+                f.write("# ==========================================\n")
+
+            viz_data.to_csv(viz_cache_file, mode='a', index=False)
 
             # Show success message
             QMessageBox.information(
@@ -671,12 +747,13 @@ class MainWindow(QMainWindow):
                 f"  • Sensor frequency: {result_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz\n"
                 f"  • Recording period: {result_df.attrs.get('recording_start')} to {result_df.attrs.get('recording_end')}\n\n"
                 f"💾 Saved to:\n"
-                f"  {output_file}\n\n"
+                f"  {output_file}\n"
+                f"  {viz_cache_file} (visualization cache)\n\n"
                 f"Next: Visualization"
             )
 
-            # Store result for visualization
-            self.processed_data = result_df
+            # Store result for visualization - use subsampled data
+            self.processed_data = viz_data
 
             # Close this window and open visualization
             self.open_visualization_window()
@@ -828,35 +905,45 @@ class VisualizationWindow(QMainWindow):
         self.apply_styles()
 
     def create_plot(self):
-        """Create matplotlib plot of all data"""
+        """Create matplotlib plot - optimized for speed"""
         # Create figure
         fig = Figure(figsize=(14, 6), dpi=100)
         canvas = FigureCanvas(fig)
 
         ax = fig.add_subplot(111)
 
-        # Plot data - subsample if too many points for display
-        data_to_plot = self.data_df
-        if len(data_to_plot) > 50000:
-            # Sample every Nth point for visualization
-            step = len(data_to_plot) // 50000
-            data_to_plot = data_to_plot.iloc[::step]
+        # Data is already subsampled during loading to ~10k points
+        # Additional subsampling only if somehow still too large
+        data_to_plot = self.data_df.copy()
 
-        # Plot pressure vs time
-        ax.plot(data_to_plot.index, data_to_plot['pressure'],
+        if len(data_to_plot) > 10000:
+            step = len(data_to_plot) // 10000
+            data_to_plot = data_to_plot.iloc[::step].reset_index(drop=True)
+
+        # Convert timestamps
+        timestamps = pd.to_datetime(data_to_plot['timestamp'])
+        pressure = data_to_plot['pressure'].values
+
+        # Simple fast plot
+        ax.plot(timestamps, pressure,
                linewidth=0.5, color='#3498db', alpha=0.7)
 
-        ax.set_xlabel('Data Point Index', fontsize=12)
+        ax.set_xlabel('Date', fontsize=12)
         ax.set_ylabel('Pressure', fontsize=12)
-        ax.set_title('Raw Wave Data - All Readings', fontsize=14, fontweight='bold')
+        ax.set_title(f'Raw Wave Data - {len(self.data_df):,} total points ({len(data_to_plot):,} displayed)',
+                    fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
 
-        # Format x-axis
-        ax.ticklabel_format(style='plain', axis='x')
+        # Format x-axis with dates
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y'))
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        fig.autofmt_xdate()
 
         fig.tight_layout()
 
         return canvas
+
 
     def on_manual_removal(self):
         """Handle manual removal button click"""
@@ -888,10 +975,163 @@ class VisualizationWindow(QMainWindow):
 
 
 def main():
-    """Запуск приложения основного"""
+    """Launch application"""
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
+    # Check if CSV already exists for fast loading
+    script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+    csv_file = script_dir / "Output" / "Step1_TXTtoCSV.csv"
+    viz_cache_file = script_dir / "Output" / "Step1_Visualization.csv"
+
+    if csv_file.exists():
+        # Ask user if they want to load existing data
+        reply = QMessageBox.question(
+            None,
+            "Existing Data Found",
+            f"Found existing processed data:\n{csv_file}\n\n"
+            "Load this data directly (fast) or start from scratch?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                # Check if visualization cache exists - INSTANT LOAD
+                if viz_cache_file.exists():
+                    # Super fast path - just load pre-sampled data
+                    df = pd.read_csv(viz_cache_file, comment='#')
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+                    # Read metadata
+                    with open(viz_cache_file, 'r') as f:
+                        for line in f:
+                            if line.startswith('# Sensor frequency:'):
+                                df.attrs['sensor_frequency_hz'] = int(line.split(':')[1].strip().split()[0])
+                            elif line.startswith('# Recording start:'):
+                                df.attrs['recording_start'] = line.split(':', 1)[1].strip()
+                            elif line.startswith('# Recording end:'):
+                                df.attrs['recording_end'] = line.split(':', 1)[1].strip()
+
+                    # Open visualization instantly
+                    viz_window = VisualizationWindow(df)
+                    viz_window.show()
+                    sys.exit(app.exec_())
+
+                # No cache - need to create it
+                # Show progress dialog for loading
+                progress_dialog = QDialog()
+                progress_dialog.setWindowTitle("Loading Data")
+                progress_dialog.setModal(True)
+                progress_dialog.setFixedSize(400, 150)
+
+                layout = QVBoxLayout(progress_dialog)
+
+                label = QLabel("Loading CSV file...")
+                label.setAlignment(Qt.AlignCenter)
+                layout.addWidget(label)
+
+                progress = QProgressBar()
+                progress.setRange(0, 0)  # Indeterminate
+                layout.addWidget(progress)
+
+                status = QLabel("Reading file...")
+                status.setAlignment(Qt.AlignCenter)
+                status.setStyleSheet("color: #7f8c8d;")
+                layout.addWidget(status)
+
+                progress_dialog.show()
+                app.processEvents()
+
+                # Count total lines (fast)
+                status.setText("Counting lines...")
+                app.processEvents()
+
+                with open(csv_file, 'rb') as f:
+                    total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1  # -1 for header
+
+                status.setText(f"Loading {total_lines:,} records (sampling for speed)...")
+                app.processEvents()
+
+                # Calculate how many rows to sample
+                target_rows = 10000
+                sample_step = max(1, total_lines // target_rows)
+
+                status.setText(f"Reading file in chunks (keeping 1 of every {sample_step} rows)...")
+                app.processEvents()
+
+                # Read in chunks and subsample on the fly
+                chunk_size = 100000
+                sampled_data = []
+                row_counter = 0
+
+                for chunk in pd.read_csv(csv_file, comment='#', chunksize=chunk_size):
+                    # Sample from this chunk
+                    chunk_indices = range(row_counter, row_counter + len(chunk))
+                    keep_indices = [i for i in chunk_indices if i % sample_step == 0]
+
+                    if keep_indices:
+                        local_indices = [i - row_counter for i in keep_indices]
+                        sampled_data.append(chunk.iloc[local_indices])
+
+                    row_counter += len(chunk)
+
+                    # Update progress
+                    progress_pct = min(100, int(row_counter / total_lines * 100))
+                    status.setText(f"Loading... {progress_pct}% ({row_counter:,} / {total_lines:,})")
+                    app.processEvents()
+
+                # Combine all sampled data
+                df = pd.concat(sampled_data, ignore_index=True)
+
+                status.setText("Converting timestamps...")
+                app.processEvents()
+
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+                # Read metadata from original file
+                with open(csv_file, 'r') as f:
+                    for line in f:
+                        if line.startswith('# Sensor frequency:'):
+                            freq = int(line.split(':')[1].strip().split()[0])
+                            df.attrs['sensor_frequency_hz'] = freq
+                        elif line.startswith('# Recording start:'):
+                            df.attrs['recording_start'] = line.split(':', 1)[1].strip()
+                        elif line.startswith('# Recording end:'):
+                            df.attrs['recording_end'] = line.split(':', 1)[1].strip()
+
+                # Save visualization cache for next time
+                status.setText("Saving visualization cache...")
+                app.processEvents()
+
+                with open(viz_cache_file, 'w', encoding='utf-8') as f:
+                    f.write("# VISUALIZATION CACHE - Subsampled data for fast plotting\n")
+                    f.write("# ==========================================\n")
+                    f.write(f"# Sensor frequency: {df.attrs.get('sensor_frequency_hz', 'N/A')} Hz\n")
+                    f.write(f"# Recording start: {df.attrs.get('recording_start', 'N/A')}\n")
+                    f.write(f"# Recording end: {df.attrs.get('recording_end', 'N/A')}\n")
+                    f.write(f"# Sampled points: {len(df)}\n")
+                    f.write("# ==========================================\n")
+
+                df.to_csv(viz_cache_file, mode='a', index=False)
+
+                progress_dialog.close()
+
+                # Open visualization
+                viz_window = VisualizationWindow(df)
+                viz_window.show()
+                sys.exit(app.exec_())
+
+            except Exception as e:
+                if 'progress_dialog' in locals():
+                    progress_dialog.close()
+                QMessageBox.warning(
+                    None,
+                    "Error Loading",
+                    f"Could not load existing data:\n{str(e)}\n\nStarting from scratch."
+                )
+
+    # Normal start - show file loading window
     window = MainWindow()
     window.show()
 
