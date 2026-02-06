@@ -906,33 +906,74 @@ class VisualizationWindow(QMainWindow):
 
     def create_plot(self):
         """Create matplotlib plot - optimized for speed"""
+        from PyQt5.QtWidgets import QDesktopWidget
+
+        # Get screen resolution for adaptive subsampling
+        screen = QDesktopWidget().screenGeometry()
+        screen_width = screen.width()
+
+        # Adaptive point count based on screen resolution
+        # Higher resolution = more points for better quality
+        if screen_width >= 2560:  # 4K
+            target_points = 15000
+        elif screen_width >= 1920:  # Full HD
+            target_points = 12000
+        else:  # HD or lower
+            target_points = 8000
+
         # Create figure
         fig = Figure(figsize=(14, 6), dpi=100)
         canvas = FigureCanvas(fig)
 
         ax = fig.add_subplot(111)
 
-        # Data is already subsampled during loading to ~10k points
-        # Additional subsampling only if somehow still too large
+        # Subsample data for visualization
         data_to_plot = self.data_df.copy()
 
-        if len(data_to_plot) > 10000:
-            step = len(data_to_plot) // 10000
+        if len(data_to_plot) > target_points:
+            step = len(data_to_plot) // target_points
             data_to_plot = data_to_plot.iloc[::step].reset_index(drop=True)
+
+        # Detect dives
+        dive_mask = self.detect_dives(data_to_plot['pressure'].values)
 
         # Convert timestamps
         timestamps = pd.to_datetime(data_to_plot['timestamp'])
         pressure = data_to_plot['pressure'].values
 
-        # Simple fast plot
+        # FIRST: Draw complete blue line (no gaps)
         ax.plot(timestamps, pressure,
-               linewidth=0.5, color='#3498db', alpha=0.7)
+               linewidth=0.5, color='#3498db', alpha=0.7, label='Wave data', zorder=1)
+
+        # SECOND: Overlay red segments on top (no connecting lines between segments)
+        if dive_mask.sum() > 0:
+            # Find continuous dive segments
+            dive_indices = np.where(dive_mask)[0]
+
+            # Split into continuous segments
+            segments = []
+            if len(dive_indices) > 0:
+                segment_start = dive_indices[0]
+                for i in range(1, len(dive_indices)):
+                    if dive_indices[i] != dive_indices[i-1] + 1:
+                        # End of segment
+                        segments.append((segment_start, dive_indices[i-1]))
+                        segment_start = dive_indices[i]
+                # Last segment
+                segments.append((segment_start, dive_indices[-1]))
+
+            # Plot each segment separately (prevents connecting lines)
+            for i, (start, end) in enumerate(segments):
+                label = 'Sensor deployment/retrieval' if i == 0 else None
+                ax.plot(timestamps[start:end+1], pressure[start:end+1],
+                       linewidth=1.0, color='#e74c3c', alpha=0.9, label=label, zorder=2)
 
         ax.set_xlabel('Date', fontsize=12)
         ax.set_ylabel('Pressure', fontsize=12)
-        ax.set_title(f'Raw Wave Data - {len(self.data_df):,} total points ({len(data_to_plot):,} displayed)',
+        ax.set_title(f'Raw Wave Data - {len(self.data_df):,} total points ({len(data_to_plot):,} displayed at {screen_width}px)',
                     fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
 
         # Format x-axis with dates
         import matplotlib.dates as mdates
@@ -944,32 +985,453 @@ class VisualizationWindow(QMainWindow):
 
         return canvas
 
+    def detect_dives(self, pressure, sensitivity=3.0):
+        """
+        NEW dive detector based on gradient analysis
+
+        Logic:
+        - Beginning leg: Low values + VERTICAL JUMP (large positive gradient)
+        - Ending leg: VERTICAL DROP (large negative gradient) + low values
+
+        The "leg" includes:
+        1. Pre-jump noise near zero
+        2. The vertical jump/drop itself
+        3. Stops when stable wave oscillations begin
+        4. +10% safety margin to ensure complete coverage
+
+        Args:
+            pressure: array of pressure values
+            sensitivity: threshold multiplier for gradient detection
+
+        Returns:
+            Boolean mask where True = dive section
+        """
+        n = len(pressure)
+        dive_mask = np.zeros(n, dtype=bool)
+
+        if n < 100:
+            return dive_mask
+
+        # Calculate gradient (rate of change)
+        gradient = np.gradient(pressure)
+        gradient_abs = np.abs(gradient)
+
+        # Statistics
+        grad_std = np.std(gradient)
+
+        # === BEGINNING LEG ===
+        # Look in first 30% of data
+        search_end = min(n // 3, 2000)
+
+        # Find the largest positive jump in beginning
+        beginning_grad = gradient[:search_end]
+        max_jump_idx = beginning_grad.argmax()
+        max_jump_value = beginning_grad[max_jump_idx]
+
+        # If there's a significant jump (> sensitivity * std)
+        if max_jump_value > sensitivity * grad_std:
+            # Beginning leg goes from start to end of jump
+            # Find where the jump transition completes
+            jump_end = max_jump_idx
+
+            # Extend a bit past the jump to include transition
+            for i in range(max_jump_idx + 1, min(max_jump_idx + 100, search_end)):
+                # Stop when gradient becomes small (stable oscillations)
+                if gradient_abs[i] < grad_std:
+                    jump_end = i
+                    break
+
+            # Add 10% safety margin
+            leg_length = jump_end
+            safety_margin = int(leg_length * 0.1)
+            jump_end = min(jump_end + safety_margin, n - 1)
+
+            # Mark from start to end of jump
+            dive_mask[0:jump_end] = True
+
+        # === ENDING LEG ===
+        # Look in last 30% of data
+        search_start = max(2 * n // 3, n - 2000)
+
+        # Find where pressure starts dropping significantly
+        ending_section = pressure[search_start:]
+        ending_grad = gradient[search_start:]
+
+        # Find the point where pressure drops below wave level and stays low
+        wave_mean = np.mean(pressure[n//3:2*n//3])  # Middle section = waves
+        low_threshold = wave_mean * 0.3  # Much lower than waves
+
+        # Find where it drops below threshold
+        drop_start = None
+        for i in range(len(ending_section) - 50):
+            # Check if next 50 points are all below threshold
+            if np.all(ending_section[i:i+50] < low_threshold):
+                drop_start = search_start + i
+                break
+
+        if drop_start is not None:
+            # Add 10% safety margin (go back earlier)
+            leg_length = n - drop_start
+            safety_margin = int(leg_length * 0.1)
+            drop_start = max(drop_start - safety_margin, 0)
+
+            # Mark from drop start to end
+            dive_mask[drop_start:] = True
+
+        return dive_mask
+
 
     def on_manual_removal(self):
         """Handle manual removal button click"""
-        QMessageBox.information(
-            self,
-            "Manual Removal",
-            "Manual data removal feature will be implemented here.\n\n"
-            "This will allow you to select and remove unwanted data sections."
-        )
-        print("Manual removal clicked - to be implemented")
+        # Close current window and open manual removal window
+        self.manual_window = ManualRemovalWindow(self.data_df)
+        self.manual_window.show()
+        self.close()
 
     def on_skip_removal(self):
-        """Handle skip button click"""
-        QMessageBox.information(
-            self,
-            "Continue",
-            "Continuing without manual removal.\n\n"
-            "Next processing steps will be implemented here."
-        )
-        print("Skip removal clicked - to be implemented")
+        """Handle skip button click - rename Step1 to Step2"""
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+        step1_file = output_folder / "Step1_TXTtoCSV.csv"
+        step2_file = output_folder / "Step2_Initial_Cut.csv"
+
+        try:
+            # Copy Step1 to Step2 (keep original)
+            import shutil
+            shutil.copy(step1_file, step2_file)
+
+            QMessageBox.information(
+                self,
+                "Success",
+                f"✅ Skipped manual removal.\n\n"
+                f"Data saved to:\n{step2_file}\n\n"
+                f"Next: Further processing"
+            )
+            self.close()
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save file:\n{str(e)}"
+            )
 
     def apply_styles(self):
         """Apply global styles"""
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f5f6fa;
+            }
+        """)
+
+
+class ManualRemovalWindow(QMainWindow):
+    """Window for manually selecting dive regions to remove"""
+
+    def __init__(self, viz_data_df):
+        super().__init__()
+        self.viz_data_df = viz_data_df  # Subsampled visualization data
+        self.cut_indices = {'beginning': None, 'ending': None}  # Store cut points
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize manual removal window"""
+        self.setWindowTitle("🌊 Manual Dive Removal")
+        self.setGeometry(50, 50, 1600, 1000)
+
+        # Central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # Header
+        header = QLabel("✂️ Manual Dive Section Removal")
+        header.setFont(QFont("Arial", 18, QFont.Bold))
+        header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("color: #2c3e50; padding: 15px;")
+        layout.addWidget(header)
+
+        # Instructions
+        instructions = QLabel(
+            "Click on the graph to mark cut point. "
+            "Beginning leg: removes everything BEFORE click. "
+            "Ending leg: removes everything AFTER click."
+        )
+        instructions.setAlignment(Qt.AlignCenter)
+        instructions.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
+        layout.addWidget(instructions)
+
+        # Load full original data and detect dives
+        self.load_full_data_and_detect()
+
+        # Beginning leg plot
+        if self.beginning_data is not None:
+            beginning_group = QGroupBox("🔻 Beginning Dive Leg (Deployment)")
+            beginning_layout = QVBoxLayout()
+            self.beginning_canvas = self.create_interactive_plot(
+                self.beginning_data,
+                "Beginning Leg - Click to mark cut point",
+                'beginning'
+            )
+            beginning_layout.addWidget(self.beginning_canvas)
+            beginning_group.setLayout(beginning_layout)
+            layout.addWidget(beginning_group)
+
+        # Ending leg plot
+        if self.ending_data is not None:
+            ending_group = QGroupBox("🔺 Ending Dive Leg (Retrieval)")
+            ending_layout = QVBoxLayout()
+            self.ending_canvas = self.create_interactive_plot(
+                self.ending_data,
+                "Ending Leg - Click to mark cut point",
+                'ending'
+            )
+            ending_layout.addWidget(self.ending_canvas)
+            ending_group.setLayout(ending_layout)
+            layout.addWidget(ending_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        btn_save = QPushButton("💾 Save Trimmed Data")
+        btn_save.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+        """)
+        btn_save.clicked.connect(self.save_trimmed_data)
+        btn_layout.addWidget(btn_save)
+
+        btn_cancel = QPushButton("❌ Cancel")
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
+        btn_cancel.clicked.connect(self.close)
+        btn_layout.addWidget(btn_cancel)
+
+        layout.addLayout(btn_layout)
+
+        self.apply_styles()
+
+    def load_full_data_and_detect(self):
+        """Load full original data and detect dive legs with safety margins"""
+        # Load full CSV (not subsampled)
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        csv_file = script_dir / "Output" / "Step1_TXTtoCSV.csv"
+
+        # Read full data
+        self.full_data = pd.read_csv(csv_file, comment='#')
+        self.full_data['timestamp'] = pd.to_datetime(self.full_data['timestamp'])
+
+        # Detect dives on full data
+        pressure_full = self.full_data['pressure'].values
+        dive_mask = self.detect_dives_full(pressure_full)
+
+        # Find beginning and ending legs
+        dive_indices = np.where(dive_mask)[0]
+
+        self.beginning_data = None
+        self.ending_data = None
+        self.beginning_indices = None
+        self.ending_indices = None
+
+        if len(dive_indices) > 0:
+            # Find segments
+            diff = np.diff(dive_indices)
+            breaks = np.where(diff > 100)[0]  # Gap > 100 points = different segments
+
+            if len(breaks) == 0:
+                # Only one segment - could be beginning or ending
+                if dive_indices[0] < len(pressure_full) // 2:
+                    # Beginning
+                    self.beginning_indices = (0, dive_indices[-1])
+                else:
+                    # Ending
+                    self.ending_indices = (dive_indices[0], len(pressure_full) - 1)
+            else:
+                # Two segments
+                # Beginning segment
+                begin_end = dive_indices[breaks[0]]
+                self.beginning_indices = (0, begin_end)
+
+                # Ending segment
+                end_start = dive_indices[breaks[0] + 1]
+                self.ending_indices = (end_start, len(pressure_full) - 1)
+
+            # Add +10% safety margin
+            if self.beginning_indices:
+                start, end = self.beginning_indices
+                margin = int((end - start) * 0.1)
+                end = min(end + margin, len(pressure_full) - 1)
+                self.beginning_indices = (start, end)
+                self.beginning_data = self.full_data.iloc[start:end+1].copy()
+
+            if self.ending_indices:
+                start, end = self.ending_indices
+                margin = int((end - start) * 0.1)
+                start = max(start - margin, 0)
+                self.ending_indices = (start, end)
+                self.ending_data = self.full_data.iloc[start:end+1].copy()
+
+    def detect_dives_full(self, pressure):
+        """Same detection logic as visualization but on full data"""
+        # Reuse detection from VisualizationWindow
+        viz_window = VisualizationWindow(pd.DataFrame())  # Dummy
+        return viz_window.detect_dives(pressure)
+
+    def create_interactive_plot(self, data, title, leg_type):
+        """Create interactive matplotlib plot with click handler"""
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
+        fig = Figure(figsize=(14, 4), dpi=100)
+        canvas = FigureCanvas(fig)
+
+        ax = fig.add_subplot(111)
+
+        timestamps = data['timestamp']
+        pressure = data['pressure'].values
+
+        # Plot
+        ax.plot(timestamps, pressure, linewidth=0.5, color='#e74c3c', alpha=0.7)
+        ax.set_xlabel('Date/Time', fontsize=11)
+        ax.set_ylabel('Pressure', fontsize=11)
+        ax.set_title(title, fontsize=13, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        # Format dates
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y %H:%M'))
+        fig.autofmt_xdate()
+
+        # Click handler
+        self.cut_lines = {leg_type: None}
+
+        def on_click(event):
+            if event.inaxes == ax and event.button == 1:  # Left click
+                # Draw vertical line at click
+                if self.cut_lines[leg_type]:
+                    self.cut_lines[leg_type].remove()
+
+                self.cut_lines[leg_type] = ax.axvline(event.xdata, color='green',
+                                                       linewidth=2, linestyle='--',
+                                                       label='Cut point')
+                canvas.draw()
+
+                # Store cut index
+                clicked_time = mdates.num2date(event.xdata)
+                # Find closest index
+                time_diff = np.abs((timestamps - clicked_time).dt.total_seconds())
+                cut_idx = time_diff.argmin()
+
+                # Convert to full data index
+                if leg_type == 'beginning':
+                    full_idx = self.beginning_indices[0] + cut_idx
+                else:  # ending
+                    full_idx = self.ending_indices[0] + cut_idx
+
+                self.cut_indices[leg_type] = full_idx
+                print(f"{leg_type} cut at full data index: {full_idx}")
+
+        canvas.mpl_connect('button_press_event', on_click)
+
+        fig.tight_layout()
+
+        # Add navigation toolbar for zoom
+        toolbar = NavigationToolbar2QT(canvas, self)
+
+        # Container widget
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.addWidget(toolbar)
+        container_layout.addWidget(canvas)
+
+        return container
+
+    def save_trimmed_data(self):
+        """Save trimmed data after removing selected dive sections"""
+        trimmed_data = self.full_data.copy()
+
+        # Apply cuts
+        if self.cut_indices['beginning'] is not None:
+            # Remove everything before cut point
+            trimmed_data = trimmed_data.iloc[self.cut_indices['beginning']:]
+        elif self.beginning_indices:
+            # No manual cut - remove entire detected beginning leg
+            trimmed_data = trimmed_data.iloc[self.beginning_indices[1]:]
+
+        if self.cut_indices['ending'] is not None:
+            # Remove everything after cut point
+            cut_relative = self.cut_indices['ending'] - trimmed_data.index[0]
+            trimmed_data = trimmed_data.iloc[:cut_relative]
+        elif self.ending_indices:
+            # No manual cut - remove entire detected ending leg
+            end_global_idx = self.ending_indices[0]
+            end_relative = end_global_idx - trimmed_data.index[0]
+            trimmed_data = trimmed_data.iloc[:end_relative]
+
+        # Save to Step2
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+        step2_file = output_folder / "Step2_Initial_Cut.csv"
+
+        # Write with metadata
+        with open(step2_file, 'w', encoding='utf-8') as f:
+            f.write("# STEP 2: Initial Cut - Manual dive removal\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Original points: {len(self.full_data)}\n")
+            f.write(f"# Trimmed points: {len(trimmed_data)}\n")
+            f.write(f"# Points removed: {len(self.full_data) - len(trimmed_data)}\n")
+            f.write("# ==========================================\n")
+
+        trimmed_data.to_csv(step2_file, mode='a', index=False)
+
+        QMessageBox.information(
+            self,
+            "Success!",
+            f"✅ Data trimmed and saved!\n\n"
+            f"Original points: {len(self.full_data):,}\n"
+            f"Removed: {len(self.full_data) - len(trimmed_data):,}\n"
+            f"Remaining: {len(trimmed_data):,}\n\n"
+            f"Saved to:\n{step2_file}"
+        )
+        self.close()
+
+    def apply_styles(self):
+        """Apply global styles"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f6fa;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #bdc3c7;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                color: #2c3e50;
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
             }
         """)
 
