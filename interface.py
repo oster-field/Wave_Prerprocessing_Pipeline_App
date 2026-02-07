@@ -16,11 +16,10 @@ import numpy as np
 import datetime
 import re
 import matplotlib
-from matplotlib import pyplot as plt
-
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib import pyplot as plt
 
 
 class ProcessingThread(QThread):
@@ -1091,32 +1090,134 @@ class VisualizationWindow(QMainWindow):
         self.close()
 
     def on_skip_removal(self):
-        """Handle skip button click - rename Step1 to Step2"""
+        """Handle skip button click - copy Step1 to Step2 with progress bar and Zero Mean processing"""
         script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
         output_folder = script_dir / "Output"
         step1_file = output_folder / "Step1_TXTtoCSV.csv"
         step2_file = output_folder / "Step2_Initial_Cut.csv"
 
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Processing Data")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Processing data...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Copying file...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
         try:
-            # Copy Step1 to Step2 (keep original)
+            # Step 1: Copy file
+            progress_bar.setValue(10)
+            status.setText("Copying Step1 to Step2...")
+            QApplication.processEvents()
+
             import shutil
             shutil.copy(step1_file, step2_file)
+
+            # Process Zero Mean
+            self.process_zero_mean(step2_file, output_folder, progress_bar, status)
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
 
             QMessageBox.information(
                 self,
                 "Success",
-                f"✅ Skipped manual removal.\n\n"
-                f"Data saved to:\n{step2_file}\n\n"
-                f"Next: Further processing"
+                f"✅ Processing complete!\n\n"
+                f"Files created:\n"
+                f"• Step2_Initial_Cut.csv\n"
+                f"• Step2_Zero_Mean.csv\n"
+                f"• Parameters.csv"
             )
             self.close()
 
         except Exception as e:
+            progress_dialog.close()
             QMessageBox.critical(
                 self,
                 "Error",
-                f"Failed to save file:\n{str(e)}"
+                f"Failed to process:\n{str(e)}"
             )
+
+    def process_zero_mean(self, step2_file, output_folder, progress_bar, status):
+        """
+        Process Zero Mean - same as in ManualRemovalWindow
+        """
+        # Read Step2 data
+        status.setText("Reading Step2_Initial_Cut.csv...")
+        QApplication.processEvents()
+
+        data = pd.read_csv(step2_file, comment='#')
+
+        # Calculate global average
+        progress_bar.setValue(85)
+        status.setText("Calculating global average (Avg_Depth_FullRec)...")
+        QApplication.processEvents()
+
+        avg_depth_full_rec = data['pressure'].mean()
+
+        # Calculate average for each reading
+        progress_bar.setValue(88)
+        status.setText("Calculating averages for each 20-min reading...")
+        QApplication.processEvents()
+
+        reading_averages = data.groupby('reading_number')['pressure'].mean().reset_index()
+        reading_averages.columns = ['reading_number', 'average_depth']
+
+        # Create Zero Mean data
+        progress_bar.setValue(92)
+        status.setText("Creating Zero Mean data...")
+        QApplication.processEvents()
+
+        zero_mean_data = data.copy()
+        zero_mean_data['pressure'] = zero_mean_data['pressure'] - avg_depth_full_rec
+
+        # Save Zero Mean file
+        progress_bar.setValue(95)
+        status.setText("Saving Step2_Zero_Mean.csv...")
+        QApplication.processEvents()
+
+        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
+        with open(zero_mean_file, 'w', encoding='utf-8') as f:
+            f.write("# STEP 2: Zero Mean - Global average subtracted\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
+            f.write(f"# All pressure values have this subtracted\n")
+            f.write("# ==========================================\n")
+
+        zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
+
+        # Save Parameters file
+        progress_bar.setValue(98)
+        status.setText("Saving Parameters.csv...")
+        QApplication.processEvents()
+
+        parameters_file = output_folder / "Parameters.csv"
+        with open(parameters_file, 'w', encoding='utf-8') as f:
+            f.write("# PARAMETERS - 20-minute readings and their characteristics\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
+            f.write("# ==========================================\n")
+
+        reading_averages.to_csv(parameters_file, mode='a', index=False)
 
     def apply_styles(self):
         """Apply global styles"""
@@ -1141,7 +1242,9 @@ class ManualRemovalWindow(QMainWindow):
     def init_ui(self):
         """Initialize manual removal window"""
         self.setWindowTitle("🌊 Manual Dive Removal")
-        self.setGeometry(50, 50, 1400, 1100)  # Taller window
+
+        # Open maximized (not fullscreen, but maximized window)
+        self.showMaximized()
 
         # Central widget
         central_widget = QWidget()
@@ -1366,16 +1469,16 @@ class ManualRemovalWindow(QMainWindow):
             dive_pressure = full_pressure[start:end+1]
             ax.plot(dive_timestamps, dive_pressure, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
 
-        ax.set_xlabel('Date/Time', fontsize=10)
-        ax.set_ylabel('Pressure', fontsize=11)
+        # No axis labels, only tick values
         ax.set_title(title, fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3)
         ax.legend(loc='upper right', fontsize=9)
 
-        # Format dates - smaller font to prevent overlap
+        # Format dates - horizontal, no rotation
         import matplotlib.dates as mdates
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=8)
+        # Keep ticks horizontal
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
         # Set initial zoom on the detected dive section
         if leg_type == 'beginning' and self.beginning_viz_range:
@@ -1575,6 +1678,13 @@ class ManualRemovalWindow(QMainWindow):
 
             trimmed_data.to_csv(step2_file, mode='a', index=False)
 
+            progress_bar.setValue(80)
+            status.setText("Processing Zero Mean...")
+            QApplication.processEvents()
+
+            # Process Zero Mean
+            self.process_zero_mean(step2_file, output_folder, progress_bar, status)
+
             progress_bar.setValue(100)
             status.setText("Complete!")
             QApplication.processEvents()
@@ -1584,11 +1694,14 @@ class ManualRemovalWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Success!",
-                f"✅ Data trimmed and saved!\n\n"
+                f"✅ Data trimmed and processed!\n\n"
                 f"Original points: {len(full_data):,}\n"
                 f"Removed: {len(full_data) - len(trimmed_data):,}\n"
                 f"Remaining: {len(trimmed_data):,}\n\n"
-                f"Saved to:\n{step2_file}"
+                f"Files created:\n"
+                f"• Step2_Initial_Cut.csv\n"
+                f"• Step2_Zero_Mean.csv\n"
+                f"• Parameters.csv"
             )
             self.close()
 
@@ -1599,6 +1712,71 @@ class ManualRemovalWindow(QMainWindow):
                 "Error",
                 f"Failed to save trimmed data:\n{str(e)}"
             )
+
+    def process_zero_mean(self, step2_file, output_folder, progress_bar, status):
+        """
+        Process Zero Mean:
+        1. Calculate Avg_Depth_FullRec (mean of all pressure values)
+        2. Create Step2_Zero_Mean.csv (all values - Avg_Depth_FullRec)
+        3. Create Parameters.csv with reading means and metadata
+        """
+        # Read Step2 data
+        status.setText("Reading Step2_Initial_Cut.csv...")
+        QApplication.processEvents()
+
+        data = pd.read_csv(step2_file, comment='#')
+
+        # Step 1: Calculate global average
+        progress_bar.setValue(85)
+        status.setText("Calculating global average (Avg_Depth_FullRec)...")
+        QApplication.processEvents()
+
+        avg_depth_full_rec = data['pressure'].mean()
+
+        # Step 2: Calculate average for each reading
+        progress_bar.setValue(88)
+        status.setText("Calculating averages for each 20-min reading...")
+        QApplication.processEvents()
+
+        reading_averages = data.groupby('reading_number')['pressure'].mean().reset_index()
+        reading_averages.columns = ['reading_number', 'average_depth']
+
+        # Step 3: Create Zero Mean data (subtract global average from all points)
+        progress_bar.setValue(92)
+        status.setText("Creating Zero Mean data...")
+        QApplication.processEvents()
+
+        zero_mean_data = data.copy()
+        zero_mean_data['pressure'] = zero_mean_data['pressure'] - avg_depth_full_rec
+
+        # Step 4: Save Zero Mean file
+        progress_bar.setValue(95)
+        status.setText("Saving Step2_Zero_Mean.csv...")
+        QApplication.processEvents()
+
+        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
+        with open(zero_mean_file, 'w', encoding='utf-8') as f:
+            f.write("# STEP 2: Zero Mean - Global average subtracted\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
+            f.write(f"# All pressure values have this subtracted\n")
+            f.write("# ==========================================\n")
+
+        zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
+
+        # Step 5: Save Parameters file
+        progress_bar.setValue(98)
+        status.setText("Saving Parameters.csv...")
+        QApplication.processEvents()
+
+        parameters_file = output_folder / "Parameters.csv"
+        with open(parameters_file, 'w', encoding='utf-8') as f:
+            f.write("# PARAMETERS - 20-minute readings and their characteristics\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
+            f.write("# ==========================================\n")
+
+        reading_averages.to_csv(parameters_file, mode='a', index=False)
 
     def apply_styles(self):
         """Apply global styles"""
@@ -1622,15 +1800,189 @@ class ManualRemovalWindow(QMainWindow):
         """)
 
 
+class Step3ProcessingWindow(QMainWindow):
+    """Window for Step 3: Spike removal and RMS filtering"""
+
+    def __init__(self):
+        super().__init__()
+        self.current_reading = 0  # Track which reading is being processed
+        self.init_ui()
+        self.load_and_visualize()
+
+    def init_ui(self):
+        """Initialize Step 3 window"""
+        self.setWindowTitle("🌊 Step 3: Spike Removal & RMS Filtering")
+        self.showMaximized()
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # Header
+        header = QLabel("Step 3: Data Quality Processing")
+        header.setFont(QFont("Arial", 18, QFont.Bold))
+        header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("color: #2c3e50; padding: 15px;")
+        layout.addWidget(header)
+
+        # Graph placeholder
+        self.graph_layout = QVBoxLayout()
+        layout.addLayout(self.graph_layout)
+
+        # Controls
+        controls_group = QGroupBox("Processing Options")
+        controls_layout = QVBoxLayout()
+
+        # Checkbox 1: Remove spikes
+        self.cb_remove_spikes = QCheckBox("Remove spikes")
+        self.cb_remove_spikes.stateChanged.connect(self.check_start_button)
+        controls_layout.addWidget(self.cb_remove_spikes)
+
+        # Checkbox 2: Remove low RMS recordings
+        rms_layout = QHBoxLayout()
+        self.cb_remove_low_rms = QCheckBox("Remove recordings with low")
+        self.cb_remove_low_rms.stateChanged.connect(self.check_start_button)
+        rms_layout.addWidget(self.cb_remove_low_rms)
+
+        # RMS input field - formatted as 0,000
+        self.rms_input = QLineEdit("0,015")
+        self.rms_input.setMaxLength(5)
+        self.rms_input.setFixedWidth(60)
+        self.rms_input.textChanged.connect(self.format_rms_input)
+        rms_layout.addWidget(self.rms_input)
+
+        rms_layout.addWidget(QLabel("meters RMS"))
+        rms_layout.addStretch()
+        controls_layout.addLayout(rms_layout)
+
+        controls_group.setLayout(controls_layout)
+        layout.addWidget(controls_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        self.btn_start = QPushButton("▶️ Start Processing")
+        self.btn_start.setEnabled(False)  # Disabled until checkbox checked
+        self.btn_start.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover:enabled {
+                background-color: #229954;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+        self.btn_start.clicked.connect(self.start_processing)
+        btn_layout.addWidget(self.btn_start)
+
+        btn_skip = QPushButton("⏭️ Skip")
+        btn_skip.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        btn_skip.clicked.connect(self.skip_processing)
+        btn_layout.addWidget(btn_skip)
+
+        layout.addLayout(btn_layout)
+
+    def format_rms_input(self, text):
+        """Format RMS input as 0,000"""
+        # Remove все кроме цифр
+        digits = ''.join(c for c in text if c.isdigit())
+
+        if len(digits) == 0:
+            return
+
+        # Pad with zeros if needed
+        digits = digits.zfill(4)  # Minimum 4 digits
+        digits = digits[:4]  # Maximum 4 digits
+
+        # Format as 0,000
+        formatted = digits[0] + ',' + digits[1:]
+
+        # Update field without triggering signal again
+        if formatted != text:
+            cursor_pos = self.rms_input.cursorPosition()
+            self.rms_input.blockSignals(True)
+            self.rms_input.setText(formatted)
+            self.rms_input.setCursorPosition(min(cursor_pos, len(formatted)))
+            self.rms_input.blockSignals(False)
+
+    def check_start_button(self):
+        """Enable start button only if at least one checkbox is checked"""
+        enabled = self.cb_remove_spikes.isChecked() or self.cb_remove_low_rms.isChecked()
+        self.btn_start.setEnabled(enabled)
+
+    def load_and_visualize(self):
+        """Load Step2_Zero_Mean and create visualization with reading boundaries"""
+        # TODO: Implement loading with progress bar and visualization
+        pass
+
+    def start_processing(self):
+        """Start spike removal and/or RMS filtering"""
+        # TODO: Implement processing logic
+        pass
+
+    def skip_processing(self):
+        """Skip Step 3 processing"""
+        QMessageBox.information(
+            self,
+            "Skipped",
+            "Step 3 processing skipped."
+        )
+        self.close()
+
+
 def main():
     """Launch application"""
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    # Check if CSV already exists for fast loading
     script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-    csv_file = script_dir / "Output" / "Step1_TXTtoCSV.csv"
-    viz_cache_file = script_dir / "Output" / "Step1_Visualization.csv"
+    output_folder = script_dir / "Output"
+
+    # CHECKPOINT 2: Check if Step2_Zero_Mean exists
+    step2_zero_mean = output_folder / "Step2_Zero_Mean.csv"
+    parameters_file = output_folder / "Parameters.csv"
+
+    if step2_zero_mean.exists() and parameters_file.exists():
+        reply = QMessageBox.question(
+            None,
+            "Step 2 Complete - Continue?",
+            f"Found processed Step 2 data:\n"
+            f"• Step2_Zero_Mean.csv\n"
+            f"• Parameters.csv\n\n"
+            "Continue to Step 3 (Spike removal & RMS filtering) or start from scratch?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            # Open Step 3 processing window
+            from PyQt5.QtWidgets import QCheckBox, QLineEdit
+            step3_window = Step3ProcessingWindow()
+            step3_window.show()
+            sys.exit(app.exec_())
+
+    # CHECKPOINT 1: Check if Step1 CSV already exists
+    csv_file = output_folder / "Step1_TXTtoCSV.csv"
+    viz_cache_file = output_folder / "Step1_Visualization.csv"
 
     if csv_file.exists():
         # Ask user if they want to load existing data
