@@ -16,6 +16,8 @@ import numpy as np
 import datetime
 import re
 import matplotlib
+from matplotlib import pyplot as plt
+
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -1131,13 +1133,15 @@ class ManualRemovalWindow(QMainWindow):
     def __init__(self, viz_data_df):
         super().__init__()
         self.viz_data_df = viz_data_df  # Subsampled visualization data
-        self.cut_indices = {'beginning': None, 'ending': None}  # Store cut points
+        self.cut_indices = {'beginning': None, 'ending': None}  # Store cut points in viz data
+        self.cut_lines = {}  # Store cut line references for each graph
+        self.shaded_regions = {}  # Store shaded region references
         self.init_ui()
 
     def init_ui(self):
         """Initialize manual removal window"""
         self.setWindowTitle("🌊 Manual Dive Removal")
-        self.setGeometry(50, 50, 1600, 1000)
+        self.setGeometry(50, 50, 1400, 1100)  # Taller window
 
         # Central widget
         central_widget = QWidget()
@@ -1154,41 +1158,41 @@ class ManualRemovalWindow(QMainWindow):
         # Instructions
         instructions = QLabel(
             "Click on the graph to mark cut point. "
-            "Beginning leg: removes everything BEFORE click. "
-            "Ending leg: removes everything AFTER click."
+            "Deployment: removes everything BEFORE click. "
+            "Retrieval: removes everything AFTER click."
         )
         instructions.setAlignment(Qt.AlignCenter)
         instructions.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
         layout.addWidget(instructions)
 
-        # Load full original data and detect dives
-        self.load_full_data_and_detect()
+        # Detect dives on visualization data
+        self.detect_dive_legs()
 
-        # Beginning leg plot
+        # Beginning dive plot (DEPLOYMENT)
         if self.beginning_data is not None:
-            beginning_group = QGroupBox("🔻 Beginning Dive Leg (Deployment)")
+            beginning_group = QGroupBox("🔻 Sensor Deployment")
             beginning_layout = QVBoxLayout()
             self.beginning_canvas = self.create_interactive_plot(
                 self.beginning_data,
-                "Beginning Leg - Click to mark cut point",
+                "Deployment - Click to mark cut point",
                 'beginning'
             )
             beginning_layout.addWidget(self.beginning_canvas)
             beginning_group.setLayout(beginning_layout)
-            layout.addWidget(beginning_group)
+            layout.addWidget(beginning_group, stretch=1)  # Equal vertical space
 
-        # Ending leg plot
+        # Ending dive plot (RETRIEVAL)
         if self.ending_data is not None:
-            ending_group = QGroupBox("🔺 Ending Dive Leg (Retrieval)")
+            ending_group = QGroupBox("🔺 Sensor Retrieval")
             ending_layout = QVBoxLayout()
             self.ending_canvas = self.create_interactive_plot(
                 self.ending_data,
-                "Ending Leg - Click to mark cut point",
+                "Retrieval - Click to mark cut point",
                 'ending'
             )
             ending_layout.addWidget(self.ending_canvas)
             ending_group.setLayout(ending_layout)
-            layout.addWidget(ending_group)
+            layout.addWidget(ending_group, stretch=1)  # Equal vertical space
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -1231,27 +1235,20 @@ class ManualRemovalWindow(QMainWindow):
 
         self.apply_styles()
 
-    def load_full_data_and_detect(self):
-        """Load full original data and detect dive legs with safety margins"""
-        # Load full CSV (not subsampled)
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        csv_file = script_dir / "Output" / "Step1_TXTtoCSV.csv"
+    def detect_dive_legs(self):
+        """Detect dive legs on visualization (subsampled) data"""
+        pressure_viz = self.viz_data_df['pressure'].values
 
-        # Read full data
-        self.full_data = pd.read_csv(csv_file, comment='#')
-        self.full_data['timestamp'] = pd.to_datetime(self.full_data['timestamp'])
-
-        # Detect dives on full data
-        pressure_full = self.full_data['pressure'].values
-        dive_mask = self.detect_dives_full(pressure_full)
+        # Detect dives (same algorithm as VisualizationWindow)
+        dive_mask = self.detect_dives(pressure_viz)
 
         # Find beginning and ending legs
         dive_indices = np.where(dive_mask)[0]
 
         self.beginning_data = None
         self.ending_data = None
-        self.beginning_indices = None
-        self.ending_indices = None
+        self.beginning_viz_range = None  # (start_idx, end_idx) in viz data
+        self.ending_viz_range = None
 
         if len(dive_indices) > 0:
             # Find segments
@@ -1259,102 +1256,210 @@ class ManualRemovalWindow(QMainWindow):
             breaks = np.where(diff > 100)[0]  # Gap > 100 points = different segments
 
             if len(breaks) == 0:
-                # Only one segment - could be beginning or ending
-                if dive_indices[0] < len(pressure_full) // 2:
+                # Only one segment
+                if dive_indices[0] < len(pressure_viz) // 2:
                     # Beginning
-                    self.beginning_indices = (0, dive_indices[-1])
+                    self.beginning_viz_range = (0, dive_indices[-1])
                 else:
                     # Ending
-                    self.ending_indices = (dive_indices[0], len(pressure_full) - 1)
+                    self.ending_viz_range = (dive_indices[0], len(pressure_viz) - 1)
             else:
                 # Two segments
                 # Beginning segment
                 begin_end = dive_indices[breaks[0]]
-                self.beginning_indices = (0, begin_end)
+                self.beginning_viz_range = (0, begin_end)
 
                 # Ending segment
                 end_start = dive_indices[breaks[0] + 1]
-                self.ending_indices = (end_start, len(pressure_full) - 1)
+                self.ending_viz_range = (end_start, len(pressure_viz) - 1)
 
             # Add +10% safety margin
-            if self.beginning_indices:
-                start, end = self.beginning_indices
+            if self.beginning_viz_range:
+                start, end = self.beginning_viz_range
                 margin = int((end - start) * 0.1)
-                end = min(end + margin, len(pressure_full) - 1)
-                self.beginning_indices = (start, end)
-                self.beginning_data = self.full_data.iloc[start:end+1].copy()
+                end = min(end + margin, len(pressure_viz) - 1)
+                self.beginning_viz_range = (start, end)
+                self.beginning_data = self.viz_data_df.iloc[start:end+1].copy()
 
-            if self.ending_indices:
-                start, end = self.ending_indices
+            if self.ending_viz_range:
+                start, end = self.ending_viz_range
                 margin = int((end - start) * 0.1)
                 start = max(start - margin, 0)
-                self.ending_indices = (start, end)
-                self.ending_data = self.full_data.iloc[start:end+1].copy()
+                self.ending_viz_range = (start, end)
+                self.ending_data = self.viz_data_df.iloc[start:end+1].copy()
 
-    def detect_dives_full(self, pressure):
-        """Same detection logic as visualization but on full data"""
-        # Reuse detection from VisualizationWindow
-        viz_window = VisualizationWindow(pd.DataFrame())  # Dummy
-        return viz_window.detect_dives(pressure)
+    def detect_dives(self, pressure, sensitivity=3.0):
+        """Same dive detection as VisualizationWindow"""
+        n = len(pressure)
+        dive_mask = np.zeros(n, dtype=bool)
+
+        if n < 100:
+            return dive_mask
+
+        gradient = np.gradient(pressure)
+        gradient_abs = np.abs(gradient)
+        grad_std = np.std(gradient)
+
+        # Beginning leg
+        search_end = min(n // 3, 2000)
+        beginning_grad = gradient[:search_end]
+        max_jump_idx = beginning_grad.argmax()
+        max_jump_value = beginning_grad[max_jump_idx]
+
+        if max_jump_value > sensitivity * grad_std:
+            jump_end = max_jump_idx
+            for i in range(max_jump_idx + 1, min(max_jump_idx + 100, search_end)):
+                if gradient_abs[i] < grad_std:
+                    jump_end = i
+                    break
+            leg_length = jump_end
+            safety_margin = int(leg_length * 0.1)
+            jump_end = min(jump_end + safety_margin, n - 1)
+            dive_mask[0:jump_end] = True
+
+        # Ending leg
+        search_start = max(2 * n // 3, n - 2000)
+        wave_mean = np.mean(pressure[n//3:2*n//3])
+        low_threshold = wave_mean * 0.3
+
+        ending_section = pressure[search_start:]
+        drop_start = None
+        for i in range(len(ending_section) - 50):
+            if np.all(ending_section[i:i+50] < low_threshold):
+                drop_start = search_start + i
+                break
+
+        if drop_start is not None:
+            leg_length = n - drop_start
+            safety_margin = int(leg_length * 0.1)
+            drop_start = max(drop_start - safety_margin, 0)
+            dive_mask[drop_start:] = True
+
+        return dive_mask
 
     def create_interactive_plot(self, data, title, leg_type):
-        """Create interactive matplotlib plot with click handler"""
+        """Create interactive matplotlib plot with click handler - full data with zoom"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
-        fig = Figure(figsize=(14, 4), dpi=100)
+        # Taller figure for vertical layout
+        fig = Figure(figsize=(14, 5), dpi=100)
         canvas = FigureCanvas(fig)
 
         ax = fig.add_subplot(111)
 
-        timestamps = data['timestamp']
-        pressure = data['pressure'].values
+        # Plot FULL viz data
+        full_timestamps = self.viz_data_df['timestamp']
+        full_pressure = self.viz_data_df['pressure'].values
 
-        # Plot
-        ax.plot(timestamps, pressure, linewidth=0.5, color='#e74c3c', alpha=0.7)
-        ax.set_xlabel('Date/Time', fontsize=11)
+        # Plot complete data
+        ax.plot(full_timestamps, full_pressure, linewidth=0.5, color='#3498db', alpha=0.7)
+
+        # Highlight the detected dive section in red
+        if leg_type == 'beginning' and self.beginning_viz_range:
+            start, end = self.beginning_viz_range
+            dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
+            dive_pressure = full_pressure[start:end+1]
+            ax.plot(dive_timestamps, dive_pressure, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
+        elif leg_type == 'ending' and self.ending_viz_range:
+            start, end = self.ending_viz_range
+            dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
+            dive_pressure = full_pressure[start:end+1]
+            ax.plot(dive_timestamps, dive_pressure, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
+
+        ax.set_xlabel('Date/Time', fontsize=10)
         ax.set_ylabel('Pressure', fontsize=11)
-        ax.set_title(title, fontsize=13, fontweight='bold')
+        ax.set_title(title, fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right', fontsize=9)
 
-        # Format dates
+        # Format dates - smaller font to prevent overlap
         import matplotlib.dates as mdates
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y %H:%M'))
-        fig.autofmt_xdate()
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=8)
+
+        # Set initial zoom on the detected dive section
+        if leg_type == 'beginning' and self.beginning_viz_range:
+            start, end = self.beginning_viz_range
+            margin_points = int((end - start) * 0.2)
+            zoom_start = max(0, start - margin_points)
+            zoom_end = min(len(full_timestamps) - 1, end + margin_points)
+
+            ax.set_xlim(full_timestamps.iloc[zoom_start], full_timestamps.iloc[zoom_end])
+
+        elif leg_type == 'ending' and self.ending_viz_range:
+            start, end = self.ending_viz_range
+            margin_points = int((end - start) * 0.2)
+            zoom_start = max(0, start - margin_points)
+            zoom_end = min(len(full_timestamps) - 1, end + margin_points)
+
+            ax.set_xlim(full_timestamps.iloc[zoom_start], full_timestamps.iloc[zoom_end])
+
+        # Initialize cut line and shaded region storage
+        self.cut_lines[leg_type] = None
+        self.shaded_regions[leg_type] = None
 
         # Click handler
-        self.cut_lines = {leg_type: None}
-
         def on_click(event):
             if event.inaxes == ax and event.button == 1:  # Left click
-                # Draw vertical line at click
+                # Remove previous cut line and shading
                 if self.cut_lines[leg_type]:
                     self.cut_lines[leg_type].remove()
+                    self.cut_lines[leg_type] = None
 
+                if self.shaded_regions[leg_type]:
+                    self.shaded_regions[leg_type].remove()
+                    self.shaded_regions[leg_type] = None
+
+                # Draw vertical line at click (event.xdata is already a number)
                 self.cut_lines[leg_type] = ax.axvline(event.xdata, color='green',
                                                        linewidth=2, linestyle='--',
-                                                       label='Cut point')
+                                                       label='Cut point', zorder=10)
+
+                # Convert clicked x-position to datetime (make tz-naive)
+                clicked_time = pd.Timestamp(mdates.num2date(event.xdata)).tz_localize(None)
+
+                # Find closest index in viz data
+                time_diff = np.abs((full_timestamps - clicked_time).dt.total_seconds())
+                viz_idx = time_diff.argmin()
+
+                # Add red shading for region to be removed
+                # Convert timestamps to matplotlib numbers for axvspan
+                if leg_type == 'beginning':
+                    # Shade everything BEFORE the cut (left side)
+                    x_start = mdates.date2num(full_timestamps.iloc[0])
+                    x_end = event.xdata  # Already a number
+                    self.shaded_regions[leg_type] = ax.axvspan(
+                        x_start,
+                        x_end,
+                        alpha=0.3,
+                        color='red',
+                        zorder=1,
+                        label='To be removed'
+                    )
+                else:  # ending
+                    # Shade everything AFTER the cut (right side)
+                    x_start = event.xdata  # Already a number
+                    x_end = mdates.date2num(full_timestamps.iloc[-1])
+                    self.shaded_regions[leg_type] = ax.axvspan(
+                        x_start,
+                        x_end,
+                        alpha=0.3,
+                        color='red',
+                        zorder=1,
+                        label='To be removed'
+                    )
+
                 canvas.draw()
 
                 # Store cut index
-                clicked_time = mdates.num2date(event.xdata)
-                # Find closest index
-                time_diff = np.abs((timestamps - clicked_time).dt.total_seconds())
-                cut_idx = time_diff.argmin()
-
-                # Convert to full data index
-                if leg_type == 'beginning':
-                    full_idx = self.beginning_indices[0] + cut_idx
-                else:  # ending
-                    full_idx = self.ending_indices[0] + cut_idx
-
-                self.cut_indices[leg_type] = full_idx
-                print(f"{leg_type} cut at full data index: {full_idx}")
+                self.cut_indices[leg_type] = viz_idx
+                print(f"{leg_type} cut at viz data index: {viz_idx}")
 
         canvas.mpl_connect('button_press_event', on_click)
 
         fig.tight_layout()
 
-        # Add navigation toolbar for zoom
+        # Add navigation toolbar for zoom/pan
         toolbar = NavigationToolbar2QT(canvas, self)
 
         # Container widget
@@ -1366,53 +1471,134 @@ class ManualRemovalWindow(QMainWindow):
         return container
 
     def save_trimmed_data(self):
-        """Save trimmed data after removing selected dive sections"""
-        trimmed_data = self.full_data.copy()
+        """Save trimmed data with progress bar - convert viz indices to full data"""
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Saving Trimmed Data")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
 
-        # Apply cuts
-        if self.cut_indices['beginning'] is not None:
-            # Remove everything before cut point
-            trimmed_data = trimmed_data.iloc[self.cut_indices['beginning']:]
-        elif self.beginning_indices:
-            # No manual cut - remove entire detected beginning leg
-            trimmed_data = trimmed_data.iloc[self.beginning_indices[1]:]
+        layout = QVBoxLayout(progress_dialog)
 
-        if self.cut_indices['ending'] is not None:
-            # Remove everything after cut point
-            cut_relative = self.cut_indices['ending'] - trimmed_data.index[0]
-            trimmed_data = trimmed_data.iloc[:cut_relative]
-        elif self.ending_indices:
-            # No manual cut - remove entire detected ending leg
-            end_global_idx = self.ending_indices[0]
-            end_relative = end_global_idx - trimmed_data.index[0]
-            trimmed_data = trimmed_data.iloc[:end_relative]
+        label = QLabel("Processing and saving data...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
 
-        # Save to Step2
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
-        step2_file = output_folder / "Step2_Initial_Cut.csv"
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
 
-        # Write with metadata
-        with open(step2_file, 'w', encoding='utf-8') as f:
-            f.write("# STEP 2: Initial Cut - Manual dive removal\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Original points: {len(self.full_data)}\n")
-            f.write(f"# Trimmed points: {len(trimmed_data)}\n")
-            f.write(f"# Points removed: {len(self.full_data) - len(trimmed_data)}\n")
-            f.write("# ==========================================\n")
+        status = QLabel("Loading full data...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
 
-        trimmed_data.to_csv(step2_file, mode='a', index=False)
+        progress_dialog.show()
+        QApplication.processEvents()
 
-        QMessageBox.information(
-            self,
-            "Success!",
-            f"✅ Data trimmed and saved!\n\n"
-            f"Original points: {len(self.full_data):,}\n"
-            f"Removed: {len(self.full_data) - len(trimmed_data):,}\n"
-            f"Remaining: {len(trimmed_data):,}\n\n"
-            f"Saved to:\n{step2_file}"
-        )
-        self.close()
+        try:
+            # Load full CSV
+            progress_bar.setValue(10)
+            status.setText("Reading full CSV file...")
+            QApplication.processEvents()
+
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            csv_file = script_dir / "Output" / "Step1_TXTtoCSV.csv"
+
+            # Count lines for progress
+            with open(csv_file, 'rb') as f:
+                total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1
+
+            progress_bar.setValue(20)
+            status.setText(f"Loading {total_lines:,} rows...")
+            QApplication.processEvents()
+
+            # Read full data
+            full_data = pd.read_csv(csv_file, comment='#')
+            full_data['timestamp'] = pd.to_datetime(full_data['timestamp'])
+
+            progress_bar.setValue(40)
+            status.setText("Converting indices from visualization to full data...")
+            QApplication.processEvents()
+
+            # Calculate subsampling step (how we created viz data)
+            subsample_step = len(full_data) // len(self.viz_data_df)
+
+            # Convert viz indices to full data indices
+            beginning_full_idx = None
+            ending_full_idx = None
+
+            if self.cut_indices['beginning'] is not None:
+                # User clicked - use that point
+                beginning_full_idx = self.cut_indices['beginning'] * subsample_step
+            elif self.beginning_viz_range:
+                # No click - use end of detected leg
+                beginning_full_idx = self.beginning_viz_range[1] * subsample_step
+
+            if self.cut_indices['ending'] is not None:
+                # User clicked - use that point
+                ending_full_idx = self.cut_indices['ending'] * subsample_step
+            elif self.ending_viz_range:
+                # No click - use start of detected leg
+                ending_full_idx = self.ending_viz_range[0] * subsample_step
+
+            progress_bar.setValue(60)
+            status.setText("Trimming data...")
+            QApplication.processEvents()
+
+            # Apply cuts
+            trimmed_data = full_data.copy()
+
+            if beginning_full_idx is not None:
+                trimmed_data = trimmed_data.iloc[beginning_full_idx:]
+
+            if ending_full_idx is not None:
+                end_relative = ending_full_idx - trimmed_data.index[0]
+                trimmed_data = trimmed_data.iloc[:end_relative]
+
+            progress_bar.setValue(80)
+            status.setText("Saving to Step2_Initial_Cut.csv...")
+            QApplication.processEvents()
+
+            # Save to Step2
+            output_folder = script_dir / "Output"
+            step2_file = output_folder / "Step2_Initial_Cut.csv"
+
+            # Write with metadata
+            with open(step2_file, 'w', encoding='utf-8') as f:
+                f.write("# STEP 2: Initial Cut - Manual dive removal\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Original points: {len(full_data):,}\n")
+                f.write(f"# Trimmed points: {len(trimmed_data):,}\n")
+                f.write(f"# Points removed: {len(full_data) - len(trimmed_data):,}\n")
+                f.write("# ==========================================\n")
+
+            trimmed_data.to_csv(step2_file, mode='a', index=False)
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            QMessageBox.information(
+                self,
+                "Success!",
+                f"✅ Data trimmed and saved!\n\n"
+                f"Original points: {len(full_data):,}\n"
+                f"Removed: {len(full_data) - len(trimmed_data):,}\n"
+                f"Remaining: {len(trimmed_data):,}\n\n"
+                f"Saved to:\n{step2_file}"
+            )
+            self.close()
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save trimmed data:\n{str(e)}"
+            )
 
     def apply_styles(self):
         """Apply global styles"""
