@@ -7,7 +7,7 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
                              QListWidget, QGroupBox, QMessageBox, QDialog,
-                             QProgressBar, QTextEdit)
+                             QProgressBar, QTextEdit, QCheckBox, QLineEdit)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent
 from pathlib import Path
@@ -1138,15 +1138,9 @@ class VisualizationWindow(QMainWindow):
 
             progress_dialog.close()
 
-            QMessageBox.information(
-                self,
-                "Success",
-                f"✅ Processing complete!\n\n"
-                f"Files created:\n"
-                f"• Step2_Initial_Cut.csv\n"
-                f"• Step2_Zero_Mean.csv\n"
-                f"• Parameters.csv"
-            )
+            # Open Step 3 window
+            self.step3_window = Step3ProcessingWindow()
+            self.step3_window.show()
             self.close()
 
         except Exception as e:
@@ -1691,18 +1685,9 @@ class ManualRemovalWindow(QMainWindow):
 
             progress_dialog.close()
 
-            QMessageBox.information(
-                self,
-                "Success!",
-                f"✅ Data trimmed and processed!\n\n"
-                f"Original points: {len(full_data):,}\n"
-                f"Removed: {len(full_data) - len(trimmed_data):,}\n"
-                f"Remaining: {len(trimmed_data):,}\n\n"
-                f"Files created:\n"
-                f"• Step2_Initial_Cut.csv\n"
-                f"• Step2_Zero_Mean.csv\n"
-                f"• Parameters.csv"
-            )
+            # Open Step 3 window
+            self.step3_window = Step3ProcessingWindow()
+            self.step3_window.show()
             self.close()
 
         except Exception as e:
@@ -1812,7 +1797,7 @@ class Step3ProcessingWindow(QMainWindow):
     def init_ui(self):
         """Initialize Step 3 window"""
         self.setWindowTitle("🌊 Step 3: Spike Removal & RMS Filtering")
-        self.showMaximized()
+        self.setGeometry(100, 100, 1400, 900)  # Normal window, not maximized
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -1840,18 +1825,18 @@ class Step3ProcessingWindow(QMainWindow):
 
         # Checkbox 2: Remove low RMS recordings
         rms_layout = QHBoxLayout()
-        self.cb_remove_low_rms = QCheckBox("Remove recordings with low")
+        self.cb_remove_low_rms = QCheckBox("Remove recordings with RMS <")
         self.cb_remove_low_rms.stateChanged.connect(self.check_start_button)
         rms_layout.addWidget(self.cb_remove_low_rms)
 
-        # RMS input field - formatted as 0,000
-        self.rms_input = QLineEdit("0,015")
-        self.rms_input.setMaxLength(5)
-        self.rms_input.setFixedWidth(60)
-        self.rms_input.textChanged.connect(self.format_rms_input)
+        # RMS input field - normal decimal input
+        self.rms_input = QLineEdit("0.015")
+        self.rms_input.setMaxLength(10)
+        self.rms_input.setFixedWidth(80)
+        self.rms_input.setPlaceholderText("0.015")
         rms_layout.addWidget(self.rms_input)
 
-        rms_layout.addWidget(QLabel("meters RMS"))
+        rms_layout.addWidget(QLabel("meters"))
         rms_layout.addStretch()
         controls_layout.addLayout(rms_layout)
 
@@ -1901,52 +1886,521 @@ class Step3ProcessingWindow(QMainWindow):
 
         layout.addLayout(btn_layout)
 
-    def format_rms_input(self, text):
-        """Format RMS input as 0,000"""
-        # Remove все кроме цифр
-        digits = ''.join(c for c in text if c.isdigit())
-
-        if len(digits) == 0:
-            return
-
-        # Pad with zeros if needed
-        digits = digits.zfill(4)  # Minimum 4 digits
-        digits = digits[:4]  # Maximum 4 digits
-
-        # Format as 0,000
-        formatted = digits[0] + ',' + digits[1:]
-
-        # Update field without triggering signal again
-        if formatted != text:
-            cursor_pos = self.rms_input.cursorPosition()
-            self.rms_input.blockSignals(True)
-            self.rms_input.setText(formatted)
-            self.rms_input.setCursorPosition(min(cursor_pos, len(formatted)))
-            self.rms_input.blockSignals(False)
-
     def check_start_button(self):
         """Enable start button only if at least one checkbox is checked"""
         enabled = self.cb_remove_spikes.isChecked() or self.cb_remove_low_rms.isChecked()
         self.btn_start.setEnabled(enabled)
 
     def load_and_visualize(self):
-        """Load Step2_Zero_Mean and create visualization with reading boundaries"""
-        # TODO: Implement loading with progress bar and visualization
-        pass
+        """Load Step2_Zero_Mean and create visualization cache"""
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+
+        step2_zero_mean = output_folder / "Step2_Zero_Mean.csv"
+        step2_viz_cache = output_folder / "Step2_Visualization.csv"
+
+        # Check if visualization cache exists
+        if step2_viz_cache.exists():
+            # Load cached visualization data
+            df = pd.read_csv(step2_viz_cache, comment='#')
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            self.create_interactive_plot(df)
+            return
+
+        # Need to create visualization cache
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Loading Data")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Loading Step2_Zero_Mean.csv...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Counting lines...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        try:
+            # Count lines
+            progress_bar.setValue(10)
+            status.setText("Counting lines...")
+            QApplication.processEvents()
+
+            with open(step2_zero_mean, 'rb') as f:
+                total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1
+
+            progress_bar.setValue(20)
+            status.setText(f"Loading {total_lines:,} rows...")
+            QApplication.processEvents()
+
+            # Calculate subsample step
+            target_points = 10000
+            subsample_step = max(1, total_lines // target_points)
+
+            status.setText(f"Reading file (sampling 1 of every {subsample_step} rows)...")
+            QApplication.processEvents()
+
+            # Read in chunks and subsample
+            chunk_size = 100000
+            sampled_data = []
+            row_counter = 0
+
+            for chunk in pd.read_csv(step2_zero_mean, comment='#', chunksize=chunk_size):
+                chunk_indices = range(row_counter, row_counter + len(chunk))
+                keep_indices = [i for i in chunk_indices if i % subsample_step == 0]
+
+                if keep_indices:
+                    local_indices = [i - row_counter for i in keep_indices]
+                    sampled_data.append(chunk.iloc[local_indices])
+
+                row_counter += len(chunk)
+
+                progress_pct = min(80, 20 + int(row_counter / total_lines * 60))
+                progress_bar.setValue(progress_pct)
+                status.setText(f"Loading... {progress_pct}% ({row_counter:,} / {total_lines:,})")
+                QApplication.processEvents()
+
+            # Combine sampled data
+            df = pd.concat(sampled_data, ignore_index=True)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            progress_bar.setValue(90)
+            status.setText("Saving visualization cache...")
+            QApplication.processEvents()
+
+            # Save visualization cache
+            with open(step2_viz_cache, 'w', encoding='utf-8') as f:
+                f.write("# STEP 2 VISUALIZATION CACHE - Subsampled Zero Mean data\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Sampled points: {len(df)}\n")
+                f.write(f"# Original points: {total_lines}\n")
+                f.write("# ==========================================\n")
+
+            df.to_csv(step2_viz_cache, mode='a', index=False)
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            # Create plot
+            self.create_interactive_plot(df)
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load data:\n{str(e)}"
+            )
+
+    def create_interactive_plot(self, data):
+        """Create interactive matplotlib plot with ALL reading boundaries"""
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
+        fig = Figure(figsize=(14, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+
+        ax = fig.add_subplot(111)
+
+        # Plot data
+        timestamps = data['timestamp']
+        pressure = data['pressure'].values
+
+        ax.plot(timestamps, pressure, linewidth=0.5, color='#3498db', alpha=0.7)
+
+        # Add horizontal line at y=0 (thick black)
+        ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
+
+        # Add vertical lines for ALL reading boundaries
+        reading_numbers = data['reading_number'].unique()
+
+        for reading_num in reading_numbers:
+            # Find first timestamp of this reading
+            reading_data = data[data['reading_number'] == reading_num]
+            if len(reading_data) > 0:
+                reading_start = reading_data['timestamp'].iloc[0]
+                ax.axvline(reading_start, color='gray', linestyle='--',
+                          linewidth=0.5, alpha=0.3)
+
+        ax.set_title('Step 2: Zero Mean Data (with 20-min reading boundaries)',
+                    fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        # Format dates
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
+
+        fig.tight_layout()
+
+        # Store for later access during processing
+        self.fig = fig
+        self.ax = ax
+        self.canvas = canvas
+
+        # Add navigation toolbar
+        toolbar = NavigationToolbar2QT(canvas, self)
+
+        # Clear previous graph and add new one
+        for i in reversed(range(self.graph_layout.count())):
+            self.graph_layout.itemAt(i).widget().setParent(None)
+
+        self.graph_layout.addWidget(toolbar)
+        self.graph_layout.addWidget(canvas)
 
     def start_processing(self):
-        """Start spike removal and/or RMS filtering"""
-        # TODO: Implement processing logic
-        pass
+        """Start spike removal and/or RMS filtering with real-time visualization"""
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+
+        step2_file = output_folder / "Step2_Zero_Mean.csv"
+        step2_viz = output_folder / "Step2_Visualization.csv"
+        parameters_file = output_folder / "Parameters.csv"
+
+        # Get options
+        remove_spikes = self.cb_remove_spikes.isChecked()
+        remove_low_rms = self.cb_remove_low_rms.isChecked()
+
+        # Parse RMS threshold
+        rms_threshold = 0.015
+        if remove_low_rms:
+            try:
+                rms_text = self.rms_input.text().strip()
+                rms_threshold = float(rms_text)
+            except:
+                rms_threshold = 0.015
+
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Processing Step 3")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Processing data...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Loading data...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        try:
+            # Load full data
+            progress_bar.setValue(5)
+            status.setText("Loading Step2_Zero_Mean.csv...")
+            QApplication.processEvents()
+
+            data = pd.read_csv(step2_file, comment='#')
+            data['timestamp'] = pd.to_datetime(data['timestamp'])
+
+            # Load viz data for mapping
+            viz_data = pd.read_csv(step2_viz, comment='#')
+            viz_data['timestamp'] = pd.to_datetime(viz_data['timestamp'])
+
+            progress_bar.setValue(10)
+            status.setText("Starting processing...")
+            QApplication.processEvents()
+
+            # Group by reading_number
+            grouped = data.groupby('reading_number')
+            total_readings = len(grouped)
+
+            removed_readings = []
+            spike_locations = []  # Store spike timestamps
+
+            import matplotlib.dates as mdates
+
+            # Batch visualization updates for speed
+            batch_size = 10  # Update canvas every 10 readings
+
+            # Track batch coloring
+            batch_readings = []  # Store readings in current batch
+            batch_has_removal = False  # Track if any reading in batch is removed
+
+            # Process each reading with visualization - SINGLE PASS
+            for idx, (reading_num, reading_data) in enumerate(grouped):
+                progress_pct = 10 + int((idx / total_readings) * 80)
+                progress_bar.setValue(progress_pct)
+                status.setText(f"Processing reading {reading_num} ({idx+1}/{total_readings})...")
+
+                # Update progress only (don't block with processEvents every time)
+                if idx % 5 == 0:
+                    QApplication.processEvents()
+
+                # Get reading boundaries
+                reading_start = reading_data['timestamp'].iloc[0]
+                reading_end = reading_data['timestamp'].iloc[-1]
+
+                # STEP 1: Check RMS first
+                should_remove = False
+                if remove_low_rms:
+                    rms_value = np.sqrt(np.mean(reading_data['pressure']**2))
+                    if rms_value < rms_threshold:
+                        should_remove = True
+                        removed_readings.append(reading_num)
+
+                # Track for batch coloring
+                batch_readings.append({
+                    'start': reading_start,
+                    'end': reading_end,
+                    'removed': should_remove
+                })
+
+                # Update batch removal flag
+                if should_remove:
+                    batch_has_removal = True
+
+                # STEP 2: If NOT removed, check for spikes in SAME PASS
+                if remove_spikes and not should_remove:
+                    # Get pressure array for this reading
+                    arr = reading_data['pressure'].values
+                    arr_indices = reading_data.index.values
+                    arr_timestamps = reading_data['timestamp'].values
+
+                    # Calculate variance once
+                    variance = np.var(arr)
+                    threshold_spike = 6 * np.sqrt(variance)  # Coefficient 6, not 3!
+
+                    # Check each point against next point
+                    for j in range(len(arr) - 1):
+                        if np.abs(arr[j + 1] - arr[j]) > threshold_spike:
+                            # Found spike at j+1
+                            spike_idx = arr_indices[j + 1]
+                            spike_time = arr_timestamps[j + 1]
+                            spike_value = arr[j + 1]
+
+                            # Store spike info for circle drawing
+                            spike_locations.append({
+                                'time': spike_time,
+                                'value': spike_value
+                            })
+
+                            # "Straighten" spike - replace with mean of neighbors
+                            # arr[j+1] = (arr[j] + arr[j+2]) / 2
+                            if j + 2 < len(arr):
+                                new_value = (arr[j] + arr[j + 2]) / 2
+                            else:
+                                # Last point - just use previous
+                                new_value = arr[j]
+
+                            # Update in main dataframe
+                            data.loc[spike_idx, 'pressure'] = new_value
+
+                # Color batch when it's full or last reading
+                if (idx + 1) % batch_size == 0 or idx == total_readings - 1:
+                    # Determine color for entire batch
+                    # RED if ANY reading in batch was removed
+                    if batch_has_removal:
+                        color = 'red'
+                        alpha = 0.35
+                    else:
+                        color = 'green'
+                        alpha = 0.35
+
+                    # Get batch boundaries
+                    batch_start = batch_readings[0]['start']
+                    batch_end = batch_readings[-1]['end']
+
+                    # Convert to matplotlib numbers
+                    x_start = mdates.date2num(batch_start)
+                    x_end = mdates.date2num(batch_end)
+
+                    # Fill batch area
+                    y_min, y_max = self.ax.get_ylim()
+                    self.ax.axvspan(x_start, x_end, alpha=alpha, color=color, zorder=2)
+
+                    # Reset batch tracking
+                    batch_readings = []
+                    batch_has_removal = False
+
+                    # Update canvas
+                    self.canvas.draw()
+                    QApplication.processEvents()
+
+            # Draw black circles for spikes
+            progress_bar.setValue(92)
+            status.setText("Marking spike locations...")
+            QApplication.processEvents()
+
+            for spike_info in spike_locations:
+                spike_time = spike_info['time']
+                spike_value = spike_info['value']
+
+                # Convert to matplotlib coordinates
+                spike_x = mdates.date2num(spike_time)
+
+                # Draw black circle at spike location
+                # Circle radius in data coordinates
+                circle = plt.Circle((spike_x, spike_value),
+                                   radius=0.1,  # Adjust radius as needed
+                                   color='black',
+                                   fill=True,
+                                   zorder=15)  # High zorder to draw on top
+                self.ax.add_patch(circle)
+
+            self.canvas.draw()
+            QApplication.processEvents()
+
+            # Remove filtered readings from data
+            progress_bar.setValue(95)
+            status.setText("Finalizing data...")
+            QApplication.processEvents()
+
+            if removed_readings:
+                data_filtered = data[~data['reading_number'].isin(removed_readings)]
+            else:
+                data_filtered = data
+
+            # Save Step3 file
+            progress_bar.setValue(98)
+            status.setText("Saving Step3_Filtered.csv...")
+            QApplication.processEvents()
+
+            step3_file = output_folder / "Step3_Filtered.csv"
+
+            with open(step3_file, 'w', encoding='utf-8') as f:
+                f.write("# STEP 3: Filtered Data - Spike removal & RMS filtering\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Spike removal: {remove_spikes}\n")
+                f.write(f"# RMS filtering: {remove_low_rms}\n")
+                if remove_low_rms:
+                    f.write(f"# RMS threshold: {rms_threshold} meters\n")
+                f.write(f"# Spikes found and corrected: {len(spike_locations)}\n")
+                f.write(f"# Readings removed: {len(removed_readings)}\n")
+                f.write(f"# Readings remaining: {total_readings - len(removed_readings)}\n")
+                f.write("# ==========================================\n")
+
+            data_filtered.to_csv(step3_file, mode='a', index=False)
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            QMessageBox.information(
+                self,
+                "Success!",
+                f"✅ Step 3 processing complete!\n\n"
+                f"Total readings: {total_readings}\n"
+                f"Removed (low RMS): {len(removed_readings)}\n"
+                f"Spikes corrected: {len(spike_locations)}\n"
+                f"Remaining: {total_readings - len(removed_readings)}\n\n"
+                f"Green = Kept\n"
+                f"Red = Removed/Spikes\n\n"
+                f"Saved to: Step3_Filtered.csv"
+            )
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Processing failed:\n{str(e)}"
+            )
 
     def skip_processing(self):
-        """Skip Step 3 processing"""
-        QMessageBox.information(
-            self,
-            "Skipped",
-            "Step 3 processing skipped."
-        )
-        self.close()
+        """Skip Step 3 processing - copy Step2_Zero_Mean to Step3_Filtered"""
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+
+        step2_file = output_folder / "Step2_Zero_Mean.csv"
+        step3_file = output_folder / "Step3_Filtered.csv"
+
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Skipping Step 3")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Copying data...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Copying Step2_Zero_Mean.csv...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        try:
+            progress_bar.setValue(30)
+            QApplication.processEvents()
+
+            # Copy file
+            import shutil
+            shutil.copy(step2_file, step3_file)
+
+            progress_bar.setValue(70)
+            status.setText("Adding metadata...")
+            QApplication.processEvents()
+
+            # Read and prepend metadata
+            with open(step3_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            with open(step3_file, 'w', encoding='utf-8') as f:
+                f.write("# STEP 3: Filtered Data - Processing skipped\n")
+                f.write("# ==========================================\n")
+                f.write("# Spike removal: False\n")
+                f.write("# RMS filtering: False\n")
+                f.write("# No filtering applied\n")
+                f.write("# ==========================================\n")
+                f.write(content)
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            QMessageBox.information(
+                self,
+                "Skipped",
+                f"✅ Step 3 processing skipped.\n\n"
+                f"Data copied to: Step3_Filtered.csv"
+            )
+            self.close()
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to copy file:\n{str(e)}"
+            )
 
 
 def main():
@@ -1975,7 +2429,6 @@ def main():
 
         if reply == QMessageBox.Yes:
             # Open Step 3 processing window
-            from PyQt5.QtWidgets import QCheckBox, QLineEdit
             step3_window = Step3ProcessingWindow()
             step3_window.show()
             sys.exit(app.exec_())
