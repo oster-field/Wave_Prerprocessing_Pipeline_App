@@ -1139,7 +1139,7 @@ class VisualizationWindow(QMainWindow):
             progress_dialog.close()
 
             # Open Step 3 window
-            self.step3_window = Step4ProcessingWindow()
+            self.step3_window = Step3FourierWindow()
             self.step3_window.show()
             self.close()
 
@@ -1186,10 +1186,10 @@ class VisualizationWindow(QMainWindow):
 
         # Save Zero Mean file
         progress_bar.setValue(95)
-        status.setText("Saving Step3_Transformed.csv...")
+        status.setText("Saving Step2_Zero_Mean.csv...")
         QApplication.processEvents()
 
-        zero_mean_file = output_folder / "Step3_Transformed.csv"
+        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
         with open(zero_mean_file, 'w', encoding='utf-8') as f:
             f.write("# STEP 2: Zero Mean - Global average subtracted\n")
             f.write("# ==========================================\n")
@@ -1198,6 +1198,25 @@ class VisualizationWindow(QMainWindow):
             f.write("# ==========================================\n")
 
         zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
+
+        # Create Step2_Visualization.csv (subsampled for caching)
+        progress_bar.setValue(96)
+        status.setText("Creating Step2_Visualization.csv...")
+        QApplication.processEvents()
+
+        target_points = 10000
+        subsample_step = max(1, len(zero_mean_data) // target_points)
+        viz_data = zero_mean_data.iloc[::subsample_step].copy()
+
+        step2_viz_file = output_folder / "Step2_Visualization.csv"
+        with open(step2_viz_file, 'w', encoding='utf-8') as f:
+            f.write("# STEP 2: Visualization Cache - Subsampled Zero Mean data\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Sampled points: {len(viz_data)}\n")
+            f.write(f"# Original points: {len(zero_mean_data)}\n")
+            f.write("# ==========================================\n")
+
+        viz_data.to_csv(step2_viz_file, mode='a', index=False)
 
         # Save Parameters file
         progress_bar.setValue(98)
@@ -1686,7 +1705,7 @@ class ManualRemovalWindow(QMainWindow):
             progress_dialog.close()
 
             # Open Step 3 window
-            self.step3_window = Step4ProcessingWindow()
+            self.step3_window = Step3FourierWindow()
             self.step3_window.show()
             self.close()
 
@@ -1702,7 +1721,7 @@ class ManualRemovalWindow(QMainWindow):
         """
         Process Zero Mean:
         1. Calculate Avg_Depth_FullRec (mean of all pressure values)
-        2. Create Step3_Transformed.csv (all values - Avg_Depth_FullRec)
+        2. Create Step2_Zero_Mean.csv (all values - Avg_Depth_FullRec)
         3. Create Parameters.csv with reading means and metadata
         """
         # Read Step2 data
@@ -1736,10 +1755,10 @@ class ManualRemovalWindow(QMainWindow):
 
         # Step 4: Save Zero Mean file
         progress_bar.setValue(95)
-        status.setText("Saving Step3_Transformed.csv...")
+        status.setText("Saving Step2_Zero_Mean.csv...")
         QApplication.processEvents()
 
-        zero_mean_file = output_folder / "Step3_Transformed.csv"
+        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
         with open(zero_mean_file, 'w', encoding='utf-8') as f:
             f.write("# STEP 2: Zero Mean - Global average subtracted\n")
             f.write("# ==========================================\n")
@@ -1748,6 +1767,25 @@ class ManualRemovalWindow(QMainWindow):
             f.write("# ==========================================\n")
 
         zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
+
+        # Create Step2_Visualization.csv (subsampled for caching)
+        progress_bar.setValue(96)
+        status.setText("Creating Step2_Visualization.csv...")
+        QApplication.processEvents()
+
+        target_points = 10000
+        subsample_step = max(1, len(zero_mean_data) // target_points)
+        viz_data = zero_mean_data.iloc[::subsample_step].copy()
+
+        step2_viz_file = output_folder / "Step2_Visualization.csv"
+        with open(step2_viz_file, 'w', encoding='utf-8') as f:
+            f.write("# STEP 2: Visualization Cache - Subsampled Zero Mean data\n")
+            f.write("# ==========================================\n")
+            f.write(f"# Sampled points: {len(viz_data)}\n")
+            f.write(f"# Original points: {len(zero_mean_data)}\n")
+            f.write("# ==========================================\n")
+
+        viz_data.to_csv(step2_viz_file, mode='a', index=False)
 
         # Step 5: Save Parameters file
         progress_bar.setValue(98)
@@ -1856,22 +1894,59 @@ class Step3FourierWindow(QMainWindow):
         script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
         output_folder = script_dir / "Output"
 
-        step2_file = output_folder / "Step3_Transformed.csv"
+        step2_file = output_folder / "Step2_Zero_Mean.csv"
         step3_spectrum = output_folder / "Step3_Spectrum.csv"
         step3_spectrum_viz = output_folder / "Step3_Spectrum_Visualization.csv"
 
         # Check if spectrum already exists
         if step3_spectrum_viz.exists():
+            # Show progress for loading cache
+            progress_dialog = QDialog(self)
+            progress_dialog.setWindowTitle("Loading Cached Spectrum")
+            progress_dialog.setModal(True)
+            progress_dialog.setFixedSize(500, 150)
+
+            layout = QVBoxLayout(progress_dialog)
+
+            label = QLabel("Loading cached spectrum...")
+            label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(label)
+
+            progress_bar = QProgressBar()
+            progress_bar.setRange(0, 100)
+            layout.addWidget(progress_bar)
+
+            status = QLabel("Loading visualization...")
+            status.setAlignment(Qt.AlignCenter)
+            status.setStyleSheet("color: #7f8c8d;")
+            layout.addWidget(status)
+
+            progress_dialog.show()
+            QApplication.processEvents()
+
             # Load cached spectrum
+            progress_bar.setValue(30)
+            QApplication.processEvents()
+
             spectrum_df = pd.read_csv(step3_spectrum_viz, comment='#')
             self.frequencies_viz = spectrum_df['frequency'].values
             self.spectrum_viz_real = spectrum_df['real'].values
             self.spectrum_viz_imag = spectrum_df['imag'].values
 
+            progress_bar.setValue(60)
+            status.setText("Loading full spectrum...")
+            QApplication.processEvents()
+
             # Load full spectrum
             spectrum_full_df = pd.read_csv(step3_spectrum, comment='#')
             self.frequencies_full = spectrum_full_df['frequency'].values
             self.spectrum_full = spectrum_full_df['real'].values + 1j * spectrum_full_df['imag'].values
+
+            progress_bar.setValue(90)
+            status.setText("Creating plot...")
+            QApplication.processEvents()
+
+            progress_dialog.close()
 
             self.create_spectrum_plot()
             return
@@ -1903,7 +1978,7 @@ class Step3FourierWindow(QMainWindow):
         try:
             # Load full Step2 data
             progress_bar.setValue(10)
-            status.setText("Loading Step3_Transformed.csv...")
+            status.setText("Loading Step2_Zero_Mean.csv...")
             QApplication.processEvents()
 
             data = pd.read_csv(step2_file, comment='#')
@@ -1947,8 +2022,8 @@ class Step3FourierWindow(QMainWindow):
             status.setText("Creating visualization...")
             QApplication.processEvents()
 
-            # Subsample for visualization
-            target_points = 10000
+            # Subsample for visualization (много точек для детального спектра)
+            target_points = 100000  # Было 10000, теперь 100k для детализации
             step = max(1, len(x) // target_points)
 
             x_viz = x[::step]
@@ -1960,6 +2035,10 @@ class Step3FourierWindow(QMainWindow):
                 'real': s_viz.real,
                 'imag': s_viz.imag
             })
+
+            progress_bar.setValue(85)
+            status.setText("Saving spectrum visualization...")
+            QApplication.processEvents()
 
             with open(step3_spectrum_viz, 'w', encoding='utf-8') as f:
                 f.write("# STEP 3: Spectrum Visualization (subsampled)\n")
@@ -1974,13 +2053,13 @@ class Step3FourierWindow(QMainWindow):
             self.spectrum_viz_real = s_viz.real
             self.spectrum_viz_imag = s_viz.imag
 
-            progress_bar.setValue(100)
-            status.setText("Complete!")
+            progress_bar.setValue(95)
+            status.setText("Preparing plot...")
             QApplication.processEvents()
 
             progress_dialog.close()
 
-            # Create plot
+            # Create plot with its own progress
             self.create_spectrum_plot()
 
         except Exception as e:
@@ -2125,7 +2204,7 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Load original data to get timestamps
-            step2_file = output_folder / "Step3_Transformed.csv"
+            step2_file = output_folder / "Step2_Zero_Mean.csv"
             data_orig = pd.read_csv(step2_file, comment='#')
 
             # Create transformed dataframe
@@ -2353,9 +2432,9 @@ class Step4ProcessingWindow(QMainWindow):
         step4_viz_cache = output_folder / "Step4_Visualization.csv"
 
         # Check if visualization cache exists
-        if step2_viz_cache.exists():
+        if step4_viz_cache.exists():
             # Load cached visualization data
-            df = pd.read_csv(step2_viz_cache, comment='#')
+            df = pd.read_csv(step4_viz_cache, comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             self.create_interactive_plot(df)
             return
@@ -2391,7 +2470,7 @@ class Step4ProcessingWindow(QMainWindow):
             status.setText("Counting lines...")
             QApplication.processEvents()
 
-            with open(step2_zero_mean, 'rb') as f:
+            with open(step3_transformed, 'rb') as f:
                 total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1
 
             progress_bar.setValue(20)
@@ -2410,7 +2489,7 @@ class Step4ProcessingWindow(QMainWindow):
             sampled_data = []
             row_counter = 0
 
-            for chunk in pd.read_csv(step2_zero_mean, comment='#', chunksize=chunk_size):
+            for chunk in pd.read_csv(step3_transformed, comment='#', chunksize=chunk_size):
                 chunk_indices = range(row_counter, row_counter + len(chunk))
                 keep_indices = [i for i in chunk_indices if i % subsample_step == 0]
 
@@ -2434,14 +2513,14 @@ class Step4ProcessingWindow(QMainWindow):
             QApplication.processEvents()
 
             # Save visualization cache
-            with open(step2_viz_cache, 'w', encoding='utf-8') as f:
-                f.write("# STEP 2 VISUALIZATION CACHE - Subsampled Zero Mean data\n")
+            with open(step4_viz_cache, 'w', encoding='utf-8') as f:
+                f.write("# STEP 4: VISUALIZATION CACHE - Subsampled Transformed data\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Sampled points: {len(df)}\n")
                 f.write(f"# Original points: {total_lines}\n")
                 f.write("# ==========================================\n")
 
-            df.to_csv(step2_viz_cache, mode='a', index=False)
+            df.to_csv(step4_viz_cache, mode='a', index=False)
 
             progress_bar.setValue(100)
             status.setText("Complete!")
@@ -3061,16 +3140,18 @@ def main():
             step4_window.show()
             sys.exit(app.exec_())
 
-    # CHECKPOINT 2: Check if Step2_Zero_Mean exists
-    step2_zero_mean = output_folder / "Step3_Transformed.csv"
+    # CHECKPOINT 2: Check if Step2_Zero_Mean exists (Step 2 complete)
+    step2_zero_mean = output_folder / "Step2_Zero_Mean.csv"
+    step2_viz = output_folder / "Step2_Visualization.csv"
     parameters_file = output_folder / "Parameters.csv"
 
-    if step2_zero_mean.exists() and parameters_file.exists():
+    if step2_zero_mean.exists() and step2_viz.exists() and parameters_file.exists():
         reply = QMessageBox.question(
             None,
             "Step 2 Complete - Continue?",
             f"Found processed Step 2 data:\n"
-            f"• Step3_Transformed.csv\n"
+            f"• Step2_Zero_Mean.csv\n"
+            f"• Step2_Visualization.csv\n"
             f"• Parameters.csv\n\n"
             "Continue to Step 3 (Fourier Transform) or start from scratch?",
             QMessageBox.Yes | QMessageBox.No,
