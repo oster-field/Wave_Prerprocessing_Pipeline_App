@@ -62,7 +62,7 @@ class ProcessingThread(QThread):
             if self.should_stop:
                 return
 
-            # Step 3: Concatenate all data into single array (fast!)
+            # Step 4: Concatenate all data into single array (fast!)
             self.progress.emit(45, "Combining data...")
             all_data = np.concatenate(all_pressure_data)
 
@@ -1139,7 +1139,7 @@ class VisualizationWindow(QMainWindow):
             progress_dialog.close()
 
             # Open Step 3 window
-            self.step3_window = Step3ProcessingWindow()
+            self.step3_window = Step4ProcessingWindow()
             self.step3_window.show()
             self.close()
 
@@ -1186,10 +1186,10 @@ class VisualizationWindow(QMainWindow):
 
         # Save Zero Mean file
         progress_bar.setValue(95)
-        status.setText("Saving Step2_Zero_Mean.csv...")
+        status.setText("Saving Step3_Transformed.csv...")
         QApplication.processEvents()
 
-        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
+        zero_mean_file = output_folder / "Step3_Transformed.csv"
         with open(zero_mean_file, 'w', encoding='utf-8') as f:
             f.write("# STEP 2: Zero Mean - Global average subtracted\n")
             f.write("# ==========================================\n")
@@ -1686,7 +1686,7 @@ class ManualRemovalWindow(QMainWindow):
             progress_dialog.close()
 
             # Open Step 3 window
-            self.step3_window = Step3ProcessingWindow()
+            self.step3_window = Step4ProcessingWindow()
             self.step3_window.show()
             self.close()
 
@@ -1702,7 +1702,7 @@ class ManualRemovalWindow(QMainWindow):
         """
         Process Zero Mean:
         1. Calculate Avg_Depth_FullRec (mean of all pressure values)
-        2. Create Step2_Zero_Mean.csv (all values - Avg_Depth_FullRec)
+        2. Create Step3_Transformed.csv (all values - Avg_Depth_FullRec)
         3. Create Parameters.csv with reading means and metadata
         """
         # Read Step2 data
@@ -1726,7 +1726,7 @@ class ManualRemovalWindow(QMainWindow):
         reading_averages = data.groupby('reading_number')['pressure'].mean().reset_index()
         reading_averages.columns = ['reading_number', 'average_depth']
 
-        # Step 3: Create Zero Mean data (subtract global average from all points)
+        # Step 4: Create Zero Mean data (subtract global average from all points)
         progress_bar.setValue(92)
         status.setText("Creating Zero Mean data...")
         QApplication.processEvents()
@@ -1736,10 +1736,10 @@ class ManualRemovalWindow(QMainWindow):
 
         # Step 4: Save Zero Mean file
         progress_bar.setValue(95)
-        status.setText("Saving Step2_Zero_Mean.csv...")
+        status.setText("Saving Step3_Transformed.csv...")
         QApplication.processEvents()
 
-        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
+        zero_mean_file = output_folder / "Step3_Transformed.csv"
         with open(zero_mean_file, 'w', encoding='utf-8') as f:
             f.write("# STEP 2: Zero Mean - Global average subtracted\n")
             f.write("# ==========================================\n")
@@ -1785,8 +1785,488 @@ class ManualRemovalWindow(QMainWindow):
         """)
 
 
-class Step3ProcessingWindow(QMainWindow):
-    """Window for Step 3: Spike removal and RMS filtering"""
+class Step3FourierWindow(QMainWindow):
+    """Window for Step 3: Fourier Transform - Remove low frequencies"""
+
+    def __init__(self):
+        super().__init__()
+        self.spectrum_full = None
+        self.frequencies_full = None
+        self.cutoff_freq = None
+        self.init_ui()
+        self.load_and_transform()
+
+    def init_ui(self):
+        """Initialize Step 3 Fourier window"""
+        self.setWindowTitle("🌊 Step 3: Fourier Transform")
+        self.setGeometry(100, 100, 1400, 900)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # Header
+        header = QLabel("Step 3: Fourier Transform - Remove Low Frequencies")
+        header.setFont(QFont("Arial", 18, QFont.Bold))
+        header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("color: #2c3e50; padding: 15px;")
+        layout.addWidget(header)
+
+        # Instructions
+        instructions = QLabel(
+            "Click on the spectrum to set cutoff frequency. "
+            "All frequencies below the cutoff will be removed."
+        )
+        instructions.setAlignment(Qt.AlignCenter)
+        instructions.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
+        layout.addWidget(instructions)
+
+        # Graph placeholder
+        self.graph_layout = QVBoxLayout()
+        layout.addLayout(self.graph_layout)
+
+        # Button
+        btn_layout = QHBoxLayout()
+
+        self.btn_continue = QPushButton("▶️ Apply and Continue")
+        self.btn_continue.setEnabled(False)  # Disabled until cutoff selected
+        self.btn_continue.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover:enabled {
+                background-color: #229954;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+        self.btn_continue.clicked.connect(self.apply_transform)
+        btn_layout.addWidget(self.btn_continue)
+
+        layout.addLayout(btn_layout)
+
+    def load_and_transform(self):
+        """Load Step2 data and perform FFT"""
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+
+        step2_file = output_folder / "Step3_Transformed.csv"
+        step3_spectrum = output_folder / "Step3_Spectrum.csv"
+        step3_spectrum_viz = output_folder / "Step3_Spectrum_Visualization.csv"
+
+        # Check if spectrum already exists
+        if step3_spectrum_viz.exists():
+            # Load cached spectrum
+            spectrum_df = pd.read_csv(step3_spectrum_viz, comment='#')
+            self.frequencies_viz = spectrum_df['frequency'].values
+            self.spectrum_viz_real = spectrum_df['real'].values
+            self.spectrum_viz_imag = spectrum_df['imag'].values
+
+            # Load full spectrum
+            spectrum_full_df = pd.read_csv(step3_spectrum, comment='#')
+            self.frequencies_full = spectrum_full_df['frequency'].values
+            self.spectrum_full = spectrum_full_df['real'].values + 1j * spectrum_full_df['imag'].values
+
+            self.create_spectrum_plot()
+            return
+
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Computing Fourier Transform")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Processing Fourier Transform...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Loading data...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        try:
+            # Load full Step2 data
+            progress_bar.setValue(10)
+            status.setText("Loading Step3_Transformed.csv...")
+            QApplication.processEvents()
+
+            data = pd.read_csv(step2_file, comment='#')
+            y = data['pressure'].values
+
+            progress_bar.setValue(30)
+            status.setText(f"Computing FFT for {len(y):,} points...")
+            QApplication.processEvents()
+
+            # Perform FFT
+            from scipy.fftpack import fft, fftfreq
+
+            sensor_freq = 8  # Hz
+            s = fft(y)
+            x = fftfreq(len(y), (1 / sensor_freq) / (2 * np.pi))  # Angular frequency
+
+            progress_bar.setValue(60)
+            status.setText("Saving full spectrum...")
+            QApplication.processEvents()
+
+            # Save full spectrum
+            spectrum_df = pd.DataFrame({
+                'frequency': x,
+                'real': s.real,
+                'imag': s.imag
+            })
+
+            with open(step3_spectrum, 'w', encoding='utf-8') as f:
+                f.write("# STEP 3: Full Fourier Spectrum\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Total points: {len(x)}\n")
+                f.write(f"# Sensor frequency: {sensor_freq} Hz\n")
+                f.write("# ==========================================\n")
+
+            spectrum_df.to_csv(step3_spectrum, mode='a', index=False)
+
+            self.spectrum_full = s
+            self.frequencies_full = x
+
+            progress_bar.setValue(75)
+            status.setText("Creating visualization...")
+            QApplication.processEvents()
+
+            # Subsample for visualization
+            target_points = 10000
+            step = max(1, len(x) // target_points)
+
+            x_viz = x[::step]
+            s_viz = s[::step]
+
+            # Save visualization
+            viz_df = pd.DataFrame({
+                'frequency': x_viz,
+                'real': s_viz.real,
+                'imag': s_viz.imag
+            })
+
+            with open(step3_spectrum_viz, 'w', encoding='utf-8') as f:
+                f.write("# STEP 3: Spectrum Visualization (subsampled)\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Sampled points: {len(x_viz)}\n")
+                f.write(f"# Original points: {len(x)}\n")
+                f.write("# ==========================================\n")
+
+            viz_df.to_csv(step3_spectrum_viz, mode='a', index=False)
+
+            self.frequencies_viz = x_viz
+            self.spectrum_viz_real = s_viz.real
+            self.spectrum_viz_imag = s_viz.imag
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            # Create plot
+            self.create_spectrum_plot()
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to compute FFT:\n{str(e)}"
+            )
+
+    def create_spectrum_plot(self):
+        """Create interactive spectrum plot"""
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
+        fig = Figure(figsize=(14, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+
+        ax = fig.add_subplot(111)
+
+        # Plot amplitude spectrum (positive frequencies only)
+        magnitude = np.sqrt(self.spectrum_viz_real**2 + self.spectrum_viz_imag**2)
+
+        # Filter to positive frequencies
+        pos_idx = self.frequencies_viz >= 0
+        freq_pos = self.frequencies_viz[pos_idx]
+        mag_pos = magnitude[pos_idx]
+
+        ax.plot(freq_pos, mag_pos, linewidth=0.5, color='#3498db', alpha=0.7)
+
+        ax.set_title('Fourier Spectrum - Click to set cutoff frequency',
+                    fontsize=12, fontweight='bold')
+        ax.set_xlabel('ω (rad/s)', fontsize=11)
+        ax.set_ylabel('Magnitude', fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, max(freq_pos))
+
+        fig.tight_layout()
+
+        # Store for later access
+        self.fig = fig
+        self.ax = ax
+        self.canvas = canvas
+
+        # Click handler
+        self.cutoff_line = None
+        self.shaded_region = None
+
+        def on_click(event):
+            if event.inaxes == ax and event.button == 1:  # Left click
+                # Remove previous line and shading
+                if self.cutoff_line:
+                    self.cutoff_line.remove()
+                if self.shaded_region:
+                    self.shaded_region.remove()
+
+                # Draw vertical line at click
+                self.cutoff_line = ax.axvline(event.xdata, color='green',
+                                              linewidth=2, linestyle='--',
+                                              label='Cutoff', zorder=10)
+
+                # Shade region to be removed (below cutoff)
+                self.shaded_region = ax.axvspan(0, event.xdata, alpha=0.3,
+                                               color='red', zorder=1,
+                                               label='To be removed')
+
+                canvas.draw()
+
+                # Store cutoff frequency
+                self.cutoff_freq = event.xdata
+                self.btn_continue.setEnabled(True)
+                print(f"Cutoff frequency set to: {self.cutoff_freq:.4f} rad/s")
+
+        canvas.mpl_connect('button_press_event', on_click)
+
+        # Add navigation toolbar
+        toolbar = NavigationToolbar2QT(canvas, self)
+
+        # Clear previous graph and add new one
+        for i in reversed(range(self.graph_layout.count())):
+            self.graph_layout.itemAt(i).widget().setParent(None)
+
+        self.graph_layout.addWidget(toolbar)
+        self.graph_layout.addWidget(canvas)
+
+    def apply_transform(self):
+        """Apply cutoff and perform inverse FFT"""
+        if self.cutoff_freq is None:
+            QMessageBox.warning(self, "Warning", "Please select cutoff frequency first!")
+            return
+
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Applying Transform")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Applying inverse Fourier Transform...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Filtering spectrum...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        try:
+            # Apply cutoff filter
+            progress_bar.setValue(20)
+            status.setText("Applying frequency filter...")
+            QApplication.processEvents()
+
+            s_filtered = self.spectrum_full.copy()
+
+            # Remove frequencies below cutoff
+            for i in range(len(self.frequencies_full)):
+                if abs(self.frequencies_full[i]) < self.cutoff_freq:
+                    s_filtered[i] = 0 + 0j
+
+            progress_bar.setValue(40)
+            status.setText("Computing inverse FFT...")
+            QApplication.processEvents()
+
+            # Inverse FFT
+            from scipy.fftpack import ifft
+
+            y_transformed = ifft(s_filtered).real
+
+            progress_bar.setValue(60)
+            status.setText("Saving transformed data...")
+            QApplication.processEvents()
+
+            # Load original data to get timestamps
+            step2_file = output_folder / "Step3_Transformed.csv"
+            data_orig = pd.read_csv(step2_file, comment='#')
+
+            # Create transformed dataframe
+            data_transformed = data_orig.copy()
+            data_transformed['pressure'] = y_transformed
+
+            # Save Step3_Transformed
+            step3_file = output_folder / "Step3_Transformed.csv"
+
+            with open(step3_file, 'w', encoding='utf-8') as f:
+                f.write("# STEP 3: Transformed Data - Low frequencies removed\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Cutoff frequency: {self.cutoff_freq:.6f} rad/s\n")
+                f.write(f"# Total points: {len(y_transformed)}\n")
+                f.write("# ==========================================\n")
+
+            data_transformed.to_csv(step3_file, mode='a', index=False)
+
+            progress_bar.setValue(80)
+            status.setText("Creating visualization...")
+            QApplication.processEvents()
+
+            # Create visualization
+            target_points = 10000
+            step = max(1, len(data_transformed) // target_points)
+
+            data_viz = data_transformed.iloc[::step].copy()
+
+            step3_viz_file = output_folder / "Step3_Visualization.csv"
+
+            with open(step3_viz_file, 'w', encoding='utf-8') as f:
+                f.write("# STEP 3: Visualization - Transformed data (subsampled)\n")
+                f.write("# ==========================================\n")
+                f.write(f"# Sampled points: {len(data_viz)}\n")
+                f.write(f"# Original points: {len(data_transformed)}\n")
+                f.write("# ==========================================\n")
+
+            data_viz.to_csv(step3_viz_file, mode='a', index=False)
+
+            progress_bar.setValue(100)
+            status.setText("Complete!")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            # Show comparison window
+            self.show_comparison(data_viz, output_folder)
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Transform failed:\n{str(e)}"
+            )
+
+    def show_comparison(self, data_transformed_viz, output_folder):
+        """Show before/after comparison"""
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
+        # Load Step2 visualization
+        step2_viz = output_folder / "Step3_Visualization.csv"
+        data_before = pd.read_csv(step2_viz, comment='#')
+        data_before['timestamp'] = pd.to_datetime(data_before['timestamp'])
+        data_transformed_viz['timestamp'] = pd.to_datetime(data_transformed_viz['timestamp'])
+
+        # Create new window
+        comparison_window = QDialog(self)
+        comparison_window.setWindowTitle("Before/After Comparison")
+        comparison_window.setGeometry(100, 100, 1400, 700)
+        comparison_window.setModal(True)
+
+        layout = QVBoxLayout(comparison_window)
+
+        # Header
+        header = QLabel("Fourier Transform Applied - Before vs After")
+        header.setFont(QFont("Arial", 16, QFont.Bold))
+        header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header)
+
+        # Create plot
+        fig = Figure(figsize=(14, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+
+        ax = fig.add_subplot(111)
+
+        # Plot before (orange, transparent)
+        ax.plot(data_before['timestamp'], data_before['pressure'],
+               linewidth=0.5, color='#FFA500', alpha=0.4, label='Before (Step 2)')
+
+        # Plot after (blue)
+        ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['pressure'],
+               linewidth=0.5, color='#3498db', alpha=0.8, label='After (Step 3)')
+
+        # Horizontal line at y=0
+        ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
+
+        ax.set_title('Before/After Fourier Transform', fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+
+        # Format dates
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
+
+        fig.tight_layout()
+
+        toolbar = NavigationToolbar2QT(canvas, comparison_window)
+
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas)
+
+        # Continue button
+        btn_continue = QPushButton("▶️ Continue to Step 4")
+        btn_continue.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+        """)
+
+        def go_to_step4():
+            comparison_window.close()
+            self.close()
+            self.step4_window = Step4ProcessingWindow()
+            self.step4_window.show()
+
+        btn_continue.clicked.connect(go_to_step4)
+        layout.addWidget(btn_continue)
+
+        comparison_window.exec_()
+class Step4ProcessingWindow(QMainWindow):
+    """Window for Step 4: Spike removal and RMS filtering"""
 
     def __init__(self):
         super().__init__()
@@ -1796,7 +2276,7 @@ class Step3ProcessingWindow(QMainWindow):
 
     def init_ui(self):
         """Initialize Step 3 window"""
-        self.setWindowTitle("🌊 Step 3: Spike Removal & RMS Filtering")
+        self.setWindowTitle("🌊 Step 4: Spike Removal & RMS Filtering")
         self.setGeometry(100, 100, 1400, 900)  # Normal window, not maximized
 
         central_widget = QWidget()
@@ -1804,7 +2284,7 @@ class Step3ProcessingWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
 
         # Header
-        header = QLabel("Step 3: Data Quality Processing")
+        header = QLabel("Step 4: Data Quality Processing")
         header.setFont(QFont("Arial", 18, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("color: #2c3e50; padding: 15px;")
@@ -1820,13 +2300,11 @@ class Step3ProcessingWindow(QMainWindow):
 
         # Checkbox 1: Remove spikes
         self.cb_remove_spikes = QCheckBox("Remove spikes")
-        self.cb_remove_spikes.stateChanged.connect(self.check_start_button)
         controls_layout.addWidget(self.cb_remove_spikes)
 
         # Checkbox 2: Remove low RMS recordings
         rms_layout = QHBoxLayout()
         self.cb_remove_low_rms = QCheckBox("Remove recordings with RMS <")
-        self.cb_remove_low_rms.stateChanged.connect(self.check_start_button)
         rms_layout.addWidget(self.cb_remove_low_rms)
 
         # RMS input field - normal decimal input
@@ -1847,7 +2325,7 @@ class Step3ProcessingWindow(QMainWindow):
         btn_layout = QHBoxLayout()
 
         self.btn_start = QPushButton("▶️ Start Processing")
-        self.btn_start.setEnabled(False)  # Disabled until checkbox checked
+        self.btn_start.setEnabled(True)  # Always enabled
         self.btn_start.setStyleSheet("""
             QPushButton {
                 background-color: #27ae60;
@@ -1857,47 +2335,22 @@ class Step3ProcessingWindow(QMainWindow):
                 padding: 15px;
                 border-radius: 5px;
             }
-            QPushButton:hover:enabled {
+            QPushButton:hover {
                 background-color: #229954;
-            }
-            QPushButton:disabled {
-                background-color: #95a5a6;
             }
         """)
         self.btn_start.clicked.connect(self.start_processing)
         btn_layout.addWidget(self.btn_start)
 
-        btn_skip = QPushButton("⏭️ Skip")
-        btn_skip.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
-        btn_skip.clicked.connect(self.skip_processing)
-        btn_layout.addWidget(btn_skip)
-
         layout.addLayout(btn_layout)
 
-    def check_start_button(self):
-        """Enable start button only if at least one checkbox is checked"""
-        enabled = self.cb_remove_spikes.isChecked() or self.cb_remove_low_rms.isChecked()
-        self.btn_start.setEnabled(enabled)
-
     def load_and_visualize(self):
-        """Load Step2_Zero_Mean and create visualization cache"""
+        """Load Step3_Transformed and create visualization cache"""
         script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
         output_folder = script_dir / "Output"
 
-        step2_zero_mean = output_folder / "Step2_Zero_Mean.csv"
-        step2_viz_cache = output_folder / "Step2_Visualization.csv"
+        step3_transformed = output_folder / "Step3_Transformed.csv"
+        step4_viz_cache = output_folder / "Step4_Visualization.csv"
 
         # Check if visualization cache exists
         if step2_viz_cache.exists():
@@ -1916,7 +2369,7 @@ class Step3ProcessingWindow(QMainWindow):
 
         layout = QVBoxLayout(progress_dialog)
 
-        label = QLabel("Loading Step2_Zero_Mean.csv...")
+        label = QLabel("Loading Step3_Transformed.csv...")
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
@@ -2063,12 +2516,15 @@ class Step3ProcessingWindow(QMainWindow):
         self.graph_layout.addWidget(canvas)
 
     def start_processing(self):
-        """Start spike removal and/or RMS filtering with real-time visualization"""
+        """
+        Start spike removal and/or RMS filtering with real-time visualization
+        Calculate ALL wave parameters in single pass
+        """
         script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
         output_folder = script_dir / "Output"
 
-        step2_file = output_folder / "Step2_Zero_Mean.csv"
-        step2_viz = output_folder / "Step2_Visualization.csv"
+        step2_file = output_folder / "Step3_Transformed.csv"
+        step2_viz = output_folder / "Step3_Visualization.csv"
         parameters_file = output_folder / "Parameters.csv"
 
         # Get options
@@ -2084,15 +2540,152 @@ class Step3ProcessingWindow(QMainWindow):
             except:
                 rms_threshold = 0.015
 
+        # Helper functions for wave analysis
+        def kh_solver(h, Tz):
+            """Solve kh equation: x * tanh(x) = (4π²h)/(g*Tz²)"""
+            from scipy.optimize import fsolve
+            g = 9.81
+            target = (4 * np.pi**2 * h) / (g * Tz**2)
+
+            def equation(x):
+                return x * np.tanh(x) - target
+
+            # Initial guess
+            x0 = 1.0
+            result = fsolve(equation, x0)[0]
+            return max(0.01, result)  # Avoid division by zero
+
+        def calculate_spectrum_params(arr, sensor_freq=8):
+            """Calculate spectral parameters: Q, nu, eps_width, rho"""
+            from scipy.fftpack import rfft, rfftfreq
+            from scipy.signal.windows import hann
+
+            # FFT with Hann window
+            mask = hann(len(arr))
+            s = np.abs(rfft(arr * mask))
+            w = rfftfreq(len(s), (1 / sensor_freq) / (2 * np.pi))
+
+            # Filter frequencies
+            if sensor_freq == 8:
+                n = 5.75
+            else:
+                n = np.pi
+            ind = w < n
+            s = s[ind]
+            w = w[ind]
+
+            if len(w) < 2:
+                return 0, 0, 0, 0
+
+            dx = w[1] - w[0]
+
+            # Spectral moments
+            m0 = np.trapezoid(s, dx=dx)
+            m1 = np.trapezoid(w * s, dx=dx)
+            m2 = np.trapezoid((w**2) * s, dx=dx)
+            m4 = np.trapezoid((w**4) * s, dx=dx)
+
+            if m0 == 0:
+                return 0, 0, 0, 0
+
+            # Q (Goda parameter)
+            Q = np.trapezoid(w * s**2, dx=dx) / (m0**2)
+
+            # nu (narrowness)
+            if m1 != 0:
+                nu = np.sqrt(((m0 * m2) / (m1**2)) - 1)
+            else:
+                nu = 0
+
+            # eps_width
+            if m0 * m4 != 0:
+                eps_width = np.sqrt(1 - (m2**2)/(m0 * m4))
+            else:
+                eps_width = 0
+
+            # rho - amplitude to extrema ratio
+            from PyAstronomy import pyaC
+            from scipy.fftpack import irfft
+
+            try:
+                y = irfft(rfft(arr)[ind])
+                t = np.arange(len(y))
+                tc, ti = pyaC.zerocross1d(t, y, getIndices=True)
+
+                tnew = np.sort(np.append(t, tc))
+                for c1 in range(1, len(tnew)):
+                    if tnew[c1] in tc:
+                        tzm1 = np.where(tnew == tnew[c1 - 1])[0]
+                        yzm1 = np.where(y == y[tzm1])[0]
+                        y = np.insert(y, yzm1 + 1, [0])
+
+                amplitudes = 0
+                extremas = 0
+                q = np.arange(0)
+
+                for j in y:
+                    if j == 0:
+                        q = np.abs(q)
+                        q = np.append(q, 0)
+                        amplitudes += 1
+                        for c2 in range(1, len(q) - 1):
+                            if q[c2] > q[c2 - 1] and q[c2] > q[c2 + 1]:
+                                extremas += 1
+                        q = np.arange(0)
+                    q = np.append(q, j)
+
+                if extremas > 0:
+                    rho = amplitudes / extremas
+                    if rho > 1:
+                        rho = 1
+                else:
+                    rho = 0
+            except:
+                rho = 0
+
+            return Q, nu, eps_width, rho
+
+        def calculate_gamma(kh):
+            """Calculate gamma function for BFI"""
+            try:
+                v = 1 + (2 * kh) / (np.sinh(2 * kh))
+                a = -v**2 + 2 + 8 * (kh**2) * ((np.cosh(2 * kh)) / ((np.sinh(2 * kh))**2))
+                b = ((np.cosh(4 * kh) + 8 - 2 * (np.tanh(kh))**2) / (8 * (np.sinh(kh))**4) -
+                     ((2 * (np.cosh(kh))**2 + 0.5 * v)**2) /
+                     ((np.sinh(2 * kh))**2 * ((kh / (np.tanh(kh))) - (v / 2)**2)))
+
+                if a < 0:
+                    print(f"Warning: a < 0 for kh={kh}")
+
+                gamma = v * np.sqrt(np.abs(b) / abs(a))
+                return gamma
+            except:
+                return 0
+
+        def calculate_Tz(arr, sensor_freq=8):
+            """Calculate mean zero-crossing period"""
+            from PyAstronomy import pyaC
+
+            try:
+                x = np.arange(len(arr))
+                xc, xi = pyaC.zerocross1d(x, arr, getIndices=True)
+                if len(xc) > 0:
+                    Tz = ((len(arr) / sensor_freq) / len(xc)) * 2
+                else:
+                    Tz = 10.0  # Default
+                return Tz
+            except:
+                return 10.0
+
         # Show progress dialog
         progress_dialog = QDialog(self)
-        progress_dialog.setWindowTitle("Processing Step 3")
+        progress_dialog.setWindowTitle("Processing Step 3 + Calculating Wave Parameters")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        progress_dialog.setFixedSize(550, 150)
 
         layout = QVBoxLayout(progress_dialog)
 
-        label = QLabel("Processing data...")
+        label = QLabel("Processing data and calculating wave parameters...")
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
@@ -2111,11 +2704,14 @@ class Step3ProcessingWindow(QMainWindow):
         try:
             # Load full data
             progress_bar.setValue(5)
-            status.setText("Loading Step2_Zero_Mean.csv...")
+            status.setText("Loading Step3_Transformed.csv...")
             QApplication.processEvents()
 
             data = pd.read_csv(step2_file, comment='#')
             data['timestamp'] = pd.to_datetime(data['timestamp'])
+
+            # Load existing parameters
+            existing_params = pd.read_csv(parameters_file, comment='#')
 
             # Load viz data for mapping
             viz_data = pd.read_csv(step2_viz, comment='#')
@@ -2130,119 +2726,204 @@ class Step3ProcessingWindow(QMainWindow):
             total_readings = len(grouped)
 
             removed_readings = []
-            spike_locations = []  # Store spike timestamps
+            spike_locations = []
+
+            # Storage for ALL new parameters
+            new_params = []
 
             import matplotlib.dates as mdates
 
-            # Batch visualization updates for speed
-            batch_size = 10  # Update canvas every 10 readings
+            # Batch visualization
+            batch_size = 10
+            batch_readings = []
+            batch_has_removal = False
 
-            # Track batch coloring
-            batch_readings = []  # Store readings in current batch
-            batch_has_removal = False  # Track if any reading in batch is removed
+            sensor_freq = 8  # Default
 
-            # Process each reading with visualization - SINGLE PASS
-            for idx, (reading_num, reading_data) in enumerate(grouped):
-                progress_pct = 10 + int((idx / total_readings) * 80)
+            # ==========================
+            # MAIN PROCESSING LOOP - OPTIMIZED
+            # ==========================
+
+            # Pre-compute all arrays for speed (avoid repeated pandas indexing)
+            reading_arrays = {}
+            reading_info = {}
+
+            for reading_num, reading_data in grouped:
+                reading_arrays[reading_num] = {
+                    'pressure': reading_data['pressure'].values,
+                    'indices': reading_data.index.values,
+                    'timestamps': reading_data['timestamp'].values,
+                    'start': reading_data['timestamp'].iloc[0],
+                    'end': reading_data['timestamp'].iloc[-1]
+                }
+
+                # Get depth
+                depth_row = existing_params[existing_params['reading_number'] == reading_num]
+                if len(depth_row) > 0:
+                    depth = depth_row['average_depth'].values[0]
+                else:
+                    depth = 10.0
+
+                reading_info[reading_num] = {'depth': depth}
+
+            # Process in batches for visualization
+            reading_nums = list(reading_arrays.keys())
+
+            # Visualization: batch size 100 for speed
+            batch_size = 100
+            batch_readings = []
+            removed_in_batch = []  # Track which specific readings were removed
+
+            for idx, reading_num in enumerate(reading_nums):
+                progress_pct = 10 + int((idx / total_readings) * 75)
                 progress_bar.setValue(progress_pct)
                 status.setText(f"Processing reading {reading_num} ({idx+1}/{total_readings})...")
 
-                # Update progress only (don't block with processEvents every time)
                 if idx % 5 == 0:
                     QApplication.processEvents()
 
-                # Get reading boundaries
-                reading_start = reading_data['timestamp'].iloc[0]
-                reading_end = reading_data['timestamp'].iloc[-1]
+                arr_data = reading_arrays[reading_num]
+                arr = arr_data['pressure']
+                arr_indices = arr_data['indices']
+                arr_timestamps = arr_data['timestamps']
+                reading_start = arr_data['start']
+                reading_end = arr_data['end']
 
-                # STEP 1: Check RMS first
+                depth = reading_info[reading_num]['depth']
+
+                # ========== STEP 1: CHECK RMS ==========
                 should_remove = False
-                if remove_low_rms:
-                    rms_value = np.sqrt(np.mean(reading_data['pressure']**2))
-                    if rms_value < rms_threshold:
-                        should_remove = True
-                        removed_readings.append(reading_num)
+                rms_value = np.sqrt(np.mean(arr**2))
+
+                if remove_low_rms and rms_value < rms_threshold:
+                    should_remove = True
+                    removed_readings.append(reading_num)
 
                 # Track for batch coloring
                 batch_readings.append({
                     'start': reading_start,
                     'end': reading_end,
+                    'reading_num': reading_num,
                     'removed': should_remove
                 })
 
-                # Update batch removal flag
                 if should_remove:
-                    batch_has_removal = True
+                    removed_in_batch.append({
+                        'start': reading_start,
+                        'end': reading_end
+                    })
+                    continue
 
-                # STEP 2: If NOT removed, check for spikes in SAME PASS
-                if remove_spikes and not should_remove:
-                    # Get pressure array for this reading
-                    arr = reading_data['pressure'].values
-                    arr_indices = reading_data.index.values
-                    arr_timestamps = reading_data['timestamp'].values
-
-                    # Calculate variance once
+                # ========== STEP 2: SPIKE REMOVAL (if enabled) ==========
+                if remove_spikes:
                     variance = np.var(arr)
-                    threshold_spike = 6 * np.sqrt(variance)  # Coefficient 6, not 3!
+                    threshold_spike = 6 * np.sqrt(variance)
 
-                    # Check each point against next point
                     for j in range(len(arr) - 1):
                         if np.abs(arr[j + 1] - arr[j]) > threshold_spike:
-                            # Found spike at j+1
                             spike_idx = arr_indices[j + 1]
                             spike_time = arr_timestamps[j + 1]
                             spike_value = arr[j + 1]
 
-                            # Store spike info for circle drawing
                             spike_locations.append({
                                 'time': spike_time,
                                 'value': spike_value
                             })
 
-                            # "Straighten" spike - replace with mean of neighbors
-                            # arr[j+1] = (arr[j] + arr[j+2]) / 2
                             if j + 2 < len(arr):
                                 new_value = (arr[j] + arr[j + 2]) / 2
                             else:
-                                # Last point - just use previous
                                 new_value = arr[j]
 
-                            # Update in main dataframe
                             data.loc[spike_idx, 'pressure'] = new_value
+                            arr[j + 1] = new_value
 
-                # Color batch when it's full or last reading
+                # ========== STEP 3: CALCULATE ALL WAVE PARAMETERS ==========
+
+                variance = np.var(arr)
+                sigma = np.sqrt(variance)
+                As = 2 * sigma
+                Hs = 4 * sigma
+
+                Tz = calculate_Tz(arr, sensor_freq)
+                kh = kh_solver(depth, Tz)
+                k = kh / depth
+                eps = (k * Hs) / 4
+                a = As / depth
+                Ur = (3 * k * Hs) / ((2 * k * depth) ** 3)
+
+                Q, nu, eps_width, rho = calculate_spectrum_params(arr, sensor_freq)
+
+                if rho > 0 and rho < 1:
+                    eps_rho = (2 * np.sqrt(1 - rho)) / (2 - rho)
+                else:
+                    eps_rho = 0
+
+                gamma = calculate_gamma(kh)
+
+                sqrt_2pi = np.sqrt(2 * np.pi)
+                BFI_proper = sqrt_2pi * eps * Q * gamma
+                BFI_goda = sqrt_2pi * eps * Q
+                BFI_goda_divide = eps / Q if Q != 0 else 0
+                BFI_nu = eps / nu if nu != 0 else 0
+                BFI_eps = eps / eps_width if eps_width != 0 else 0
+                BFI_rho = eps / eps_rho if eps_rho != 0 else 0
+
+                new_params.append({
+                    'reading_number': reading_num,
+                    'average_depth': depth,
+                    'rms': rms_value,
+                    'As': As,
+                    'Hs': Hs,
+                    'Tz': Tz,
+                    'kh': kh,
+                    'k': k,
+                    'eps': eps,
+                    'a': a,
+                    'Ur': Ur,
+                    'Q_goda': Q,
+                    'nu': nu,
+                    'eps_width': eps_width,
+                    'rho': rho,
+                    'eps_rho': eps_rho,
+                    'gamma': gamma,
+                    'BFI_proper': BFI_proper,
+                    'BFI_goda': BFI_goda,
+                    'BFI_goda_divide': BFI_goda_divide,
+                    'BFI_nu': BFI_nu,
+                    'BFI_eps': BFI_eps,
+                    'BFI_rho': BFI_rho
+                })
+
+                # ========== VISUALIZATION (OPTIMIZED) ==========
                 if (idx + 1) % batch_size == 0 or idx == total_readings - 1:
-                    # Determine color for entire batch
-                    # RED if ANY reading in batch was removed
-                    if batch_has_removal:
-                        color = 'red'
-                        alpha = 0.35
-                    else:
-                        color = 'green'
-                        alpha = 0.35
+                    # Color entire batch GREEN first
+                    if len(batch_readings) > 0:
+                        batch_start = batch_readings[0]['start']
+                        batch_end = batch_readings[-1]['end']
 
-                    # Get batch boundaries
-                    batch_start = batch_readings[0]['start']
-                    batch_end = batch_readings[-1]['end']
+                        x_start = mdates.date2num(batch_start)
+                        x_end = mdates.date2num(batch_end)
 
-                    # Convert to matplotlib numbers
-                    x_start = mdates.date2num(batch_start)
-                    x_end = mdates.date2num(batch_end)
+                        y_min, y_max = self.ax.get_ylim()
 
-                    # Fill batch area
-                    y_min, y_max = self.ax.get_ylim()
-                    self.ax.axvspan(x_start, x_end, alpha=alpha, color=color, zorder=2)
+                        # Green for entire batch
+                        self.ax.axvspan(x_start, x_end, alpha=0.35, color='green', zorder=2)
 
-                    # Reset batch tracking
+                        # Red ONLY for removed readings (overlay on top)
+                        for removed_reading in removed_in_batch:
+                            x_rem_start = mdates.date2num(removed_reading['start'])
+                            x_rem_end = mdates.date2num(removed_reading['end'])
+                            self.ax.axvspan(x_rem_start, x_rem_end, alpha=0.35, color='red', zorder=3)
+
                     batch_readings = []
-                    batch_has_removal = False
+                    removed_in_batch = []
 
-                    # Update canvas
                     self.canvas.draw()
                     QApplication.processEvents()
 
             # Draw black circles for spikes
-            progress_bar.setValue(92)
+            progress_bar.setValue(87)
             status.setText("Marking spike locations...")
             QApplication.processEvents()
 
@@ -2250,23 +2931,20 @@ class Step3ProcessingWindow(QMainWindow):
                 spike_time = spike_info['time']
                 spike_value = spike_info['value']
 
-                # Convert to matplotlib coordinates
                 spike_x = mdates.date2num(spike_time)
 
-                # Draw black circle at spike location
-                # Circle radius in data coordinates
                 circle = plt.Circle((spike_x, spike_value),
-                                   radius=0.1,  # Adjust radius as needed
+                                   radius=0.1,
                                    color='black',
                                    fill=True,
-                                   zorder=15)  # High zorder to draw on top
+                                   zorder=15)
                 self.ax.add_patch(circle)
 
             self.canvas.draw()
             QApplication.processEvents()
 
-            # Remove filtered readings from data
-            progress_bar.setValue(95)
+            # Remove filtered readings
+            progress_bar.setValue(90)
             status.setText("Finalizing data...")
             QApplication.processEvents()
 
@@ -2276,7 +2954,7 @@ class Step3ProcessingWindow(QMainWindow):
                 data_filtered = data
 
             # Save Step3 file
-            progress_bar.setValue(98)
+            progress_bar.setValue(93)
             status.setText("Saving Step3_Filtered.csv...")
             QApplication.processEvents()
 
@@ -2296,110 +2974,60 @@ class Step3ProcessingWindow(QMainWindow):
 
             data_filtered.to_csv(step3_file, mode='a', index=False)
 
+            # Update Parameters.csv with ALL new parameters
+            progress_bar.setValue(96)
+            status.setText("Updating Parameters.csv...")
+            QApplication.processEvents()
+
+            new_params_df = pd.DataFrame(new_params)
+
+            # Save updated Parameters.csv
+            parameters_updated = output_folder / "Parameters.csv"
+
+            with open(parameters_updated, 'w', encoding='utf-8') as f:
+                f.write("# PARAMETERS - 20-minute readings and wave characteristics\n")
+                f.write("# ==========================================\n")
+                f.write("# All wave parameters calculated in Step 3\n")
+                f.write("# ==========================================\n")
+
+            new_params_df.to_csv(parameters_updated, mode='a', index=False)
+
             progress_bar.setValue(100)
             status.setText("Complete!")
             QApplication.processEvents()
 
             progress_dialog.close()
+
+            # Calculate statistics for display
+            if len(new_params) > 0:
+                mean_Hs = np.mean([p['Hs'] for p in new_params])
+                mean_Tz = np.mean([p['Tz'] for p in new_params])
+                mean_eps = np.mean([p['eps'] for p in new_params])
+                mean_BFI = np.mean([p['BFI_goda'] for p in new_params])
+            else:
+                mean_Hs = mean_Tz = mean_eps = mean_BFI = 0
 
             QMessageBox.information(
                 self,
                 "Success!",
                 f"✅ Step 3 processing complete!\n\n"
+                f"📊 Statistics:\n"
                 f"Total readings: {total_readings}\n"
                 f"Removed (low RMS): {len(removed_readings)}\n"
                 f"Spikes corrected: {len(spike_locations)}\n"
                 f"Remaining: {total_readings - len(removed_readings)}\n\n"
-                f"Green = Kept\n"
-                f"Red = Removed/Spikes\n\n"
-                f"Saved to: Step3_Filtered.csv"
+                f"Files saved:\n"
+                f"• Step3_Filtered.csv\n"
+                f"• Parameters.csv (updated with 23 parameters)"
             )
 
         except Exception as e:
             progress_dialog.close()
+            import traceback
             QMessageBox.critical(
                 self,
                 "Error",
-                f"Processing failed:\n{str(e)}"
-            )
-
-    def skip_processing(self):
-        """Skip Step 3 processing - copy Step2_Zero_Mean to Step3_Filtered"""
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
-
-        step2_file = output_folder / "Step2_Zero_Mean.csv"
-        step3_file = output_folder / "Step3_Filtered.csv"
-
-        # Show progress dialog
-        progress_dialog = QDialog(self)
-        progress_dialog.setWindowTitle("Skipping Step 3")
-        progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
-
-        layout = QVBoxLayout(progress_dialog)
-
-        label = QLabel("Copying data...")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
-
-        progress_bar = QProgressBar()
-        progress_bar.setRange(0, 100)
-        layout.addWidget(progress_bar)
-
-        status = QLabel("Copying Step2_Zero_Mean.csv...")
-        status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
-        layout.addWidget(status)
-
-        progress_dialog.show()
-        QApplication.processEvents()
-
-        try:
-            progress_bar.setValue(30)
-            QApplication.processEvents()
-
-            # Copy file
-            import shutil
-            shutil.copy(step2_file, step3_file)
-
-            progress_bar.setValue(70)
-            status.setText("Adding metadata...")
-            QApplication.processEvents()
-
-            # Read and prepend metadata
-            with open(step3_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            with open(step3_file, 'w', encoding='utf-8') as f:
-                f.write("# STEP 3: Filtered Data - Processing skipped\n")
-                f.write("# ==========================================\n")
-                f.write("# Spike removal: False\n")
-                f.write("# RMS filtering: False\n")
-                f.write("# No filtering applied\n")
-                f.write("# ==========================================\n")
-                f.write(content)
-
-            progress_bar.setValue(100)
-            status.setText("Complete!")
-            QApplication.processEvents()
-
-            progress_dialog.close()
-
-            QMessageBox.information(
-                self,
-                "Skipped",
-                f"✅ Step 3 processing skipped.\n\n"
-                f"Data copied to: Step3_Filtered.csv"
-            )
-            self.close()
-
-        except Exception as e:
-            progress_dialog.close()
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to copy file:\n{str(e)}"
+                f"Processing failed:\n{str(e)}\n\n{traceback.format_exc()}"
             )
 
 
@@ -2411,8 +3039,30 @@ def main():
     script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
     output_folder = script_dir / "Output"
 
+    # CHECKPOINT 3: Check if Step3_Transformed exists
+    step3_transformed = output_folder / "Step3_Transformed.csv"
+    step3_viz = output_folder / "Step3_Visualization.csv"
+
+    if step3_transformed.exists() and step3_viz.exists():
+        reply = QMessageBox.question(
+            None,
+            "Step 3 Complete - Continue?",
+            f"Found processed Step 3 data:\n"
+            f"• Step3_Transformed.csv\n"
+            f"• Step3_Visualization.csv\n"
+            f"• Parameters.csv\n\n"
+            "Continue to Step 4 (Spike removal & RMS filtering) or start from scratch?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            step4_window = Step4ProcessingWindow()
+            step4_window.show()
+            sys.exit(app.exec_())
+
     # CHECKPOINT 2: Check if Step2_Zero_Mean exists
-    step2_zero_mean = output_folder / "Step2_Zero_Mean.csv"
+    step2_zero_mean = output_folder / "Step3_Transformed.csv"
     parameters_file = output_folder / "Parameters.csv"
 
     if step2_zero_mean.exists() and parameters_file.exists():
@@ -2420,16 +3070,16 @@ def main():
             None,
             "Step 2 Complete - Continue?",
             f"Found processed Step 2 data:\n"
-            f"• Step2_Zero_Mean.csv\n"
+            f"• Step3_Transformed.csv\n"
             f"• Parameters.csv\n\n"
-            "Continue to Step 3 (Spike removal & RMS filtering) or start from scratch?",
+            "Continue to Step 3 (Fourier Transform) or start from scratch?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
 
         if reply == QMessageBox.Yes:
-            # Open Step 3 processing window
-            step3_window = Step3ProcessingWindow()
+            # Open Step 3 Fourier window
+            step3_window = Step3FourierWindow()
             step3_window.show()
             sys.exit(app.exec_())
 
