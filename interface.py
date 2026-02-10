@@ -2265,8 +2265,8 @@ class Step3FourierWindow(QMainWindow):
         """Show before/after comparison"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
-        # Load Step2 visualization
-        step2_viz = output_folder / "Step3_Visualization.csv"
+        # Load Step2 visualization (BEFORE Fourier transform)
+        step2_viz = output_folder / "Step2_Visualization.csv"
         data_before = pd.read_csv(step2_viz, comment='#')
         data_before['timestamp'] = pd.to_datetime(data_before['timestamp'])
         data_transformed_viz['timestamp'] = pd.to_datetime(data_transformed_viz['timestamp'])
@@ -2291,16 +2291,16 @@ class Step3FourierWindow(QMainWindow):
 
         ax = fig.add_subplot(111)
 
-        # Plot before (orange, transparent)
+        # Plot before (orange, more transparent per your request)
         ax.plot(data_before['timestamp'], data_before['pressure'],
-               linewidth=0.5, color='#FFA500', alpha=0.4, label='Before (Step 2)')
+               linewidth=0.5, color='#FFA500', alpha=0.6, label='Before (Step 2)', zorder=1)
 
-        # Plot after (blue)
+        # Plot after (blue, less transparent per your request)
         ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['pressure'],
-               linewidth=0.5, color='#3498db', alpha=0.8, label='After (Step 3)')
+               linewidth=0.5, color='#3498db', alpha=0.7, label='After (Step 3)', zorder=2)
 
-        # Horizontal line at y=0
-        ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
+        # Horizontal line at y=0 (on top)
+        ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=10)
 
         ax.set_title('Before/After Fourier Transform', fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3)
@@ -3032,15 +3032,15 @@ class Step4ProcessingWindow(QMainWindow):
             else:
                 data_filtered = data
 
-            # Save Step3 file
+            # Save Step4 file
             progress_bar.setValue(93)
-            status.setText("Saving Step3_Filtered.csv...")
+            status.setText("Saving Step4_Filtered.csv...")
             QApplication.processEvents()
 
-            step3_file = output_folder / "Step3_Filtered.csv"
+            step4_file = output_folder / "Step4_Filtered.csv"
 
-            with open(step3_file, 'w', encoding='utf-8') as f:
-                f.write("# STEP 3: Filtered Data - Spike removal & RMS filtering\n")
+            with open(step4_file, 'w', encoding='utf-8') as f:
+                f.write("# STEP 4: Filtered Data - Spike removal & RMS filtering\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Spike removal: {remove_spikes}\n")
                 f.write(f"# RMS filtering: {remove_low_rms}\n")
@@ -3051,7 +3051,7 @@ class Step4ProcessingWindow(QMainWindow):
                 f.write(f"# Readings remaining: {total_readings - len(removed_readings)}\n")
                 f.write("# ==========================================\n")
 
-            data_filtered.to_csv(step3_file, mode='a', index=False)
+            data_filtered.to_csv(step4_file, mode='a', index=False)
 
             # Update Parameters.csv with ALL new parameters
             progress_bar.setValue(96)
@@ -3096,7 +3096,7 @@ class Step4ProcessingWindow(QMainWindow):
                 f"Spikes corrected: {len(spike_locations)}\n"
                 f"Remaining: {total_readings - len(removed_readings)}\n\n"
                 f"Files saved:\n"
-                f"• Step3_Filtered.csv\n"
+                f"• Step4_Filtered.csv\n"
                 f"• Parameters.csv (updated with 23 parameters)"
             )
 
