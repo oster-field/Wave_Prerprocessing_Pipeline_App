@@ -21,6 +21,20 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 
+# ==============================================================================
+# VISUALIZATION CONFIGURATION
+# ==============================================================================
+# Optimal subsampling for FullHD displays (1920×1080)
+# Based on Nyquist theorem: we need 2-3 points per pixel for smooth zoom
+# Graph width ≈ 1800px → 1800 × 2.5 = 4500 points optimal
+# We use 5000 for safety margin and smooth zooming
+VISUALIZATION_TARGET_POINTS = 5000
+
+# For spectrum visualization we want higher detail (100k points)
+# because frequency domain requires finer resolution
+SPECTRUM_TARGET_POINTS = 100000
+# ==============================================================================
+
 
 class ProcessingThread(QThread):
     """Background thread for data processing"""
@@ -406,7 +420,7 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """Инициализация интерфейса"""
         self.setWindowTitle("🌊 Sakhalin Wave Processor")
-        self.setGeometry(100, 100, 900, 700)
+        self.showMaximized()  # Fullscreen
 
         # Central widget
         central_widget = QWidget()
@@ -837,7 +851,7 @@ class VisualizationWindow(QMainWindow):
     def init_ui(self):
         """Initialize visualization window"""
         self.setWindowTitle("🌊 Wave Data Visualization")
-        self.setGeometry(100, 100, 1400, 900)
+        self.showMaximized()  # Fullscreen
 
         # Central widget
         central_widget = QWidget()
@@ -914,13 +928,14 @@ class VisualizationWindow(QMainWindow):
         screen_width = screen.width()
 
         # Adaptive point count based on screen resolution
-        # Higher resolution = more points for better quality
-        if screen_width >= 2560:  # 4K
-            target_points = 15000
+        # Base: 5000 points for FullHD (optimal by Nyquist theorem)
+        # Scale proportionally for higher resolutions
+        if screen_width >= 2560:  # 4K (2.67x more pixels)
+            target_points = VISUALIZATION_TARGET_POINTS * 3  # 15000
         elif screen_width >= 1920:  # Full HD
-            target_points = 12000
+            target_points = VISUALIZATION_TARGET_POINTS * 2  # 10000 (more for initial view)
         else:  # HD or lower
-            target_points = 8000
+            target_points = VISUALIZATION_TARGET_POINTS  # 5000
 
         # Create figure
         fig = Figure(figsize=(14, 6), dpi=100)
@@ -1204,7 +1219,7 @@ class VisualizationWindow(QMainWindow):
         status.setText("Creating Step2_Visualization.csv...")
         QApplication.processEvents()
 
-        target_points = 10000
+        target_points = VISUALIZATION_TARGET_POINTS  # 5000 points optimal for FullHD
         subsample_step = max(1, len(zero_mean_data) // target_points)
         viz_data = zero_mean_data.iloc[::subsample_step].copy()
 
@@ -1773,7 +1788,7 @@ class ManualRemovalWindow(QMainWindow):
         status.setText("Creating Step2_Visualization.csv...")
         QApplication.processEvents()
 
-        target_points = 10000
+        target_points = VISUALIZATION_TARGET_POINTS  # 5000 points optimal for FullHD
         subsample_step = max(1, len(zero_mean_data) // target_points)
         viz_data = zero_mean_data.iloc[::subsample_step].copy()
 
@@ -1832,12 +1847,13 @@ class Step3FourierWindow(QMainWindow):
         self.frequencies_full = None
         self.cutoff_freq = None
         self.init_ui()
+        # Don't show yet - wait until data is loaded
         self.load_and_transform()
 
     def init_ui(self):
         """Initialize Step 3 Fourier window"""
         self.setWindowTitle("🌊 Step 3: Fourier Transform")
-        self.setGeometry(100, 100, 1400, 900)
+        # Don't show maximized here - will show after data loads
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -1949,6 +1965,9 @@ class Step3FourierWindow(QMainWindow):
             progress_dialog.close()
 
             self.create_spectrum_plot()
+
+            # Show window maximized AFTER data is loaded
+            self.showMaximized()
             return
 
         # Show progress dialog
@@ -2023,7 +2042,7 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Subsample for visualization (много точек для детального спектра)
-            target_points = 100000  # Было 10000, теперь 100k для детализации
+            target_points = SPECTRUM_TARGET_POINTS  # 100k points for detailed spectrum
             step = max(1, len(x) // target_points)
 
             x_viz = x[::step]
@@ -2061,6 +2080,9 @@ class Step3FourierWindow(QMainWindow):
 
             # Create plot with its own progress
             self.create_spectrum_plot()
+
+            # Show window maximized AFTER data is loaded
+            self.showMaximized()
 
         except Exception as e:
             progress_dialog.close()
@@ -2211,6 +2233,22 @@ class Step3FourierWindow(QMainWindow):
             data_transformed = data_orig.copy()
             data_transformed['pressure'] = y_transformed
 
+            progress_bar.setValue(65)
+            status.setText("Removing edge readings...")
+            QApplication.processEvents()
+
+            # Remove first 2 and last 2 readings (20-minute recordings)
+            reading_numbers = data_transformed['reading_number'].unique()
+            if len(reading_numbers) > 4:
+                # Get reading numbers to keep (exclude first 2 and last 2)
+                readings_to_keep = reading_numbers[2:-2]
+                data_transformed = data_transformed[data_transformed['reading_number'].isin(readings_to_keep)]
+                data_transformed = data_transformed.reset_index(drop=True)
+
+            progress_bar.setValue(70)
+            status.setText("Saving transformed data...")
+            QApplication.processEvents()
+
             # Save Step3_Transformed
             step3_file = output_folder / "Step3_Transformed.csv"
 
@@ -2218,7 +2256,10 @@ class Step3FourierWindow(QMainWindow):
                 f.write("# STEP 3: Transformed Data - Low frequencies removed\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Cutoff frequency: {self.cutoff_freq:.6f} rad/s\n")
-                f.write(f"# Total points: {len(y_transformed)}\n")
+                f.write(f"# Original readings: {len(reading_numbers)}\n")
+                f.write(f"# Readings after edge removal: {len(readings_to_keep) if len(reading_numbers) > 4 else len(reading_numbers)}\n")
+                f.write(f"# First 2 and last 2 readings removed\n")
+                f.write(f"# Total points: {len(data_transformed)}\n")
                 f.write("# ==========================================\n")
 
             data_transformed.to_csv(step3_file, mode='a', index=False)
@@ -2228,7 +2269,7 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Create visualization
-            target_points = 10000
+            target_points = VISUALIZATION_TARGET_POINTS  # 5000 points optimal for FullHD
             step = max(1, len(data_transformed) // target_points)
 
             data_viz = data_transformed.iloc[::step].copy()
@@ -2248,10 +2289,13 @@ class Step3FourierWindow(QMainWindow):
             status.setText("Complete!")
             QApplication.processEvents()
 
-            progress_dialog.close()
+            # Keep progress dialog open, update for comparison
+            progress_bar.setValue(0)
+            status.setText("Loading Step2 data for comparison...")
+            QApplication.processEvents()
 
-            # Show comparison window
-            self.show_comparison(data_viz, output_folder)
+            # Show comparison window with progress
+            self.show_comparison(data_viz, output_folder, progress_dialog, progress_bar, status)
 
         except Exception as e:
             progress_dialog.close()
@@ -2261,20 +2305,28 @@ class Step3FourierWindow(QMainWindow):
                 f"Transform failed:\n{str(e)}"
             )
 
-    def show_comparison(self, data_transformed_viz, output_folder):
+    def show_comparison(self, data_transformed_viz, output_folder, progress_dialog, progress_bar, status):
         """Show before/after comparison"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # Load Step2 visualization (BEFORE Fourier transform)
+        progress_bar.setValue(20)
+        status.setText("Loading Step2 visualization...")
+        QApplication.processEvents()
+
         step2_viz = output_folder / "Step2_Visualization.csv"
         data_before = pd.read_csv(step2_viz, comment='#')
         data_before['timestamp'] = pd.to_datetime(data_before['timestamp'])
         data_transformed_viz['timestamp'] = pd.to_datetime(data_transformed_viz['timestamp'])
 
+        progress_bar.setValue(50)
+        status.setText("Creating comparison plot...")
+        QApplication.processEvents()
+
         # Create new window
         comparison_window = QDialog(self)
         comparison_window.setWindowTitle("Before/After Comparison")
-        comparison_window.setGeometry(100, 100, 1400, 700)
+        comparison_window.setGeometry(100, 100, 1400, 700)  # Normal size, not maximized
         comparison_window.setModal(True)
 
         layout = QVBoxLayout(comparison_window)
@@ -2285,6 +2337,10 @@ class Step3FourierWindow(QMainWindow):
         header.setAlignment(Qt.AlignCenter)
         layout.addWidget(header)
 
+        progress_bar.setValue(70)
+        status.setText("Rendering plot...")
+        QApplication.processEvents()
+
         # Create plot
         fig = Figure(figsize=(14, 6), dpi=100)
         canvas = FigureCanvas(fig)
@@ -2293,11 +2349,11 @@ class Step3FourierWindow(QMainWindow):
 
         # Plot before (orange, more transparent per your request)
         ax.plot(data_before['timestamp'], data_before['pressure'],
-               linewidth=0.5, color='#FFA500', alpha=0.6, label='Before (Step 2)', zorder=1)
+               linewidth=0.5, color='#FFA500', alpha=0.6, label='Before', zorder=1)
 
         # Plot after (blue, less transparent per your request)
         ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['pressure'],
-               linewidth=0.5, color='#3498db', alpha=0.7, label='After (Step 3)', zorder=2)
+               linewidth=0.5, color='#3498db', alpha=0.7, label='After', zorder=2)
 
         # Horizontal line at y=0 (on top)
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=10)
@@ -2313,10 +2369,21 @@ class Step3FourierWindow(QMainWindow):
 
         fig.tight_layout()
 
+        progress_bar.setValue(90)
+        status.setText("Finalizing...")
+        QApplication.processEvents()
+
         toolbar = NavigationToolbar2QT(canvas, comparison_window)
 
         layout.addWidget(toolbar)
         layout.addWidget(canvas)
+
+        progress_bar.setValue(100)
+        status.setText("Complete!")
+        QApplication.processEvents()
+
+        # Close progress dialog
+        progress_dialog.close()
 
         # Continue button
         btn_continue = QPushButton("▶️ Continue to Step 4")
@@ -2351,12 +2418,13 @@ class Step4ProcessingWindow(QMainWindow):
         super().__init__()
         self.current_reading = 0  # Track which reading is being processed
         self.init_ui()
+        # Don't show yet - wait until data is loaded
         self.load_and_visualize()
 
     def init_ui(self):
         """Initialize Step 3 window"""
         self.setWindowTitle("🌊 Step 4: Spike Removal & RMS Filtering")
-        self.setGeometry(100, 100, 1400, 900)  # Normal window, not maximized
+        # Don't show maximized here - will show after data loads
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -2424,22 +2492,12 @@ class Step4ProcessingWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
     def load_and_visualize(self):
-        """Load Step3_Transformed and create visualization cache"""
+        """Load Step3_Visualization and create plot"""
         script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
         output_folder = script_dir / "Output"
 
-        step3_transformed = output_folder / "Step3_Transformed.csv"
-        step4_viz_cache = output_folder / "Step4_Visualization.csv"
+        step3_viz = output_folder / "Step3_Visualization.csv"
 
-        # Check if visualization cache exists
-        if step4_viz_cache.exists():
-            # Load cached visualization data
-            df = pd.read_csv(step4_viz_cache, comment='#')
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            self.create_interactive_plot(df)
-            return
-
-        # Need to create visualization cache
         # Show progress dialog
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Loading Data")
@@ -2448,7 +2506,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         layout = QVBoxLayout(progress_dialog)
 
-        label = QLabel("Loading Step3_Transformed.csv...")
+        label = QLabel("Loading Step3_Visualization.csv...")
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
@@ -2456,7 +2514,7 @@ class Step4ProcessingWindow(QMainWindow):
         progress_bar.setRange(0, 100)
         layout.addWidget(progress_bar)
 
-        status = QLabel("Counting lines...")
+        status = QLabel("Loading visualization...")
         status.setAlignment(Qt.AlignCenter)
         status.setStyleSheet("color: #7f8c8d;")
         layout.addWidget(status)
@@ -2465,71 +2523,25 @@ class Step4ProcessingWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            # Count lines
-            progress_bar.setValue(10)
-            status.setText("Counting lines...")
+            # Load Step3_Visualization directly (already subsampled)
+            progress_bar.setValue(30)
+            status.setText("Reading Step3_Visualization.csv...")
             QApplication.processEvents()
 
-            with open(step3_transformed, 'rb') as f:
-                total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1
-
-            progress_bar.setValue(20)
-            status.setText(f"Loading {total_lines:,} rows...")
-            QApplication.processEvents()
-
-            # Calculate subsample step
-            target_points = 10000
-            subsample_step = max(1, total_lines // target_points)
-
-            status.setText(f"Reading file (sampling 1 of every {subsample_step} rows)...")
-            QApplication.processEvents()
-
-            # Read in chunks and subsample
-            chunk_size = 100000
-            sampled_data = []
-            row_counter = 0
-
-            for chunk in pd.read_csv(step3_transformed, comment='#', chunksize=chunk_size):
-                chunk_indices = range(row_counter, row_counter + len(chunk))
-                keep_indices = [i for i in chunk_indices if i % subsample_step == 0]
-
-                if keep_indices:
-                    local_indices = [i - row_counter for i in keep_indices]
-                    sampled_data.append(chunk.iloc[local_indices])
-
-                row_counter += len(chunk)
-
-                progress_pct = min(80, 20 + int(row_counter / total_lines * 60))
-                progress_bar.setValue(progress_pct)
-                status.setText(f"Loading... {progress_pct}% ({row_counter:,} / {total_lines:,})")
-                QApplication.processEvents()
-
-            # Combine sampled data
-            df = pd.concat(sampled_data, ignore_index=True)
+            df = pd.read_csv(step3_viz, comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-            progress_bar.setValue(90)
-            status.setText("Saving visualization cache...")
-            QApplication.processEvents()
-
-            # Save visualization cache
-            with open(step4_viz_cache, 'w', encoding='utf-8') as f:
-                f.write("# STEP 4: VISUALIZATION CACHE - Subsampled Transformed data\n")
-                f.write("# ==========================================\n")
-                f.write(f"# Sampled points: {len(df)}\n")
-                f.write(f"# Original points: {total_lines}\n")
-                f.write("# ==========================================\n")
-
-            df.to_csv(step4_viz_cache, mode='a', index=False)
-
-            progress_bar.setValue(100)
-            status.setText("Complete!")
+            progress_bar.setValue(70)
+            status.setText("Creating plot...")
             QApplication.processEvents()
 
             progress_dialog.close()
 
             # Create plot
             self.create_interactive_plot(df)
+
+            # Show window maximized AFTER data is loaded
+            self.showMaximized()
 
         except Exception as e:
             progress_dialog.close()
@@ -2568,9 +2580,12 @@ class Step4ProcessingWindow(QMainWindow):
                 ax.axvline(reading_start, color='gray', linestyle='--',
                           linewidth=0.5, alpha=0.3)
 
-        ax.set_title('Step 2: Zero Mean Data (with 20-min reading boundaries)',
+        ax.set_title('Step 3: Transformed Data (after Fourier Transform, with 20-min reading boundaries)',
                     fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3)
+
+        # Set x-axis limits to data boundaries (tight zoom)
+        ax.set_xlim(timestamps.iloc[0], timestamps.iloc[-1])
 
         # Format dates
         import matplotlib.dates as mdates
