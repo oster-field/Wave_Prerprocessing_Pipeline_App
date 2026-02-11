@@ -4,22 +4,38 @@ Sakhalin Wave Processor - Новый интерфейс
 """
 
 import sys
+import re
+import datetime
+from pathlib import Path
+
+# PyQt5 imports
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
                              QListWidget, QGroupBox, QMessageBox, QDialog,
-                             QProgressBar, QTextEdit, QCheckBox, QLineEdit)
+                             QProgressBar, QTextEdit, QCheckBox, QLineEdit,
+                             QDesktopWidget)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent
-from pathlib import Path
+
+# Data processing imports
 import pandas as pd
 import numpy as np
-import datetime
-import re
+
+# Matplotlib imports
 import matplotlib
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
+
+# Scientific computing imports
+from scipy.fftpack import fft, fftfreq, ifft, rfft, rfftfreq, irfft
+
+# Optional imports (may not be installed)
+try:
+    HAS_PYASTRONOMY = True
+except ImportError:
+    HAS_PYASTRONOMY = False
 
 # ==============================================================================
 # VISUALIZATION CONFIGURATION
@@ -33,7 +49,65 @@ VISUALIZATION_TARGET_POINTS = 5000
 # For spectrum visualization we want higher detail (100k points)
 # because frequency domain requires finer resolution
 SPECTRUM_TARGET_POINTS = 100000
+
+# Maximum file size allowed (500 MB default)
+MAX_FILE_SIZE_MB = 500
 # ==============================================================================
+
+
+def validate_file_size(file_path, max_size_mb=MAX_FILE_SIZE_MB):
+    """
+    Validate that file size is within acceptable limits.
+
+    Args:
+        file_path: Path to the file to check
+        max_size_mb: Maximum allowed size in megabytes
+
+    Returns:
+        tuple: (is_valid: bool, size_mb: float, error_msg: str or None)
+    """
+    try:
+        file_size = Path(file_path).stat().st_size
+        size_mb = file_size / (1024 * 1024)
+
+        if size_mb > max_size_mb:
+            return False, size_mb, f"File is too large: {size_mb:.1f} MB (max: {max_size_mb} MB)"
+
+        return True, size_mb, None
+    except Exception as e:
+        return False, 0, f"Could not check file size: {str(e)}"
+
+
+def validate_file_path(file_path):
+    """
+    Validate that file exists and is readable.
+
+    Args:
+        file_path: Path to validate
+
+    Returns:
+        tuple: (is_valid: bool, error_msg: str or None)
+    """
+    path = Path(file_path)
+
+    if not path.exists():
+        return False, f"File does not exist: {file_path}"
+
+    if not path.is_file():
+        return False, f"Path is not a file: {file_path}"
+
+    if not path.stat().st_size > 0:
+        return False, f"File is empty: {file_path}"
+
+    try:
+        with open(path, 'rb') as f:
+            f.read(1)  # Try to read one byte
+        return True, None
+    except PermissionError:
+        return False, f"No permission to read file: {file_path}"
+    except Exception as e:
+        return False, f"Cannot read file: {str(e)}"
+
 
 
 class ProcessingThread(QThread):
@@ -152,7 +226,6 @@ class ProcessingThread(QThread):
             self.finished.emit(True, final_df)
 
         except Exception as e:
-            import traceback
             error_msg = f"Error: {str(e)}\n{traceback.format_exc()}"
             self.progress.emit(0, error_msg)
             self.finished.emit(False, None)
@@ -165,7 +238,7 @@ class ProcessingThread(QThread):
                 with open(self.info_file, 'r', encoding=encoding, errors='ignore') as f:
                     lines = f.readlines()
                 break
-            except:
+            except (UnicodeDecodeError, IOError):
                 continue
         else:
             with open(self.info_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -217,7 +290,7 @@ class ProcessingThread(QThread):
             try:
                 # Try direct load with comma as decimal separator
                 return np.genfromtxt(file_path, delimiter='\n', encoding='utf-8')
-            except:
+            except (ValueError, UnicodeDecodeError, IOError):
                 # Fallback: read and replace commas
                 with open(file_path, 'rb') as f:
                     content = f.read().decode('utf-8', errors='ignore')
@@ -598,7 +671,27 @@ class MainWindow(QMainWindow):
             self.add_data_files(files)
 
     def set_info_file(self, file_path):
-        """Set INFO file"""
+        """Set INFO file with validation"""
+        # Validate file path
+        is_valid, error_msg = validate_file_path(file_path)
+        if not is_valid:
+            QMessageBox.warning(
+                self,
+                "Invalid File",
+                f"Cannot load INFO file:\n{error_msg}"
+            )
+            return
+
+        # Validate file size
+        is_valid, size_mb, error_msg = validate_file_size(file_path, max_size_mb=10)  # INFO files should be small
+        if not is_valid:
+            QMessageBox.warning(
+                self,
+                "File Too Large",
+                f"INFO file is unexpectedly large:\n{error_msg}"
+            )
+            return
+
         self.info_file = file_path
         filename = Path(file_path).name
 
@@ -618,7 +711,6 @@ class MainWindow(QMainWindow):
 
     def read_frequency_from_info(self, file_path):
         """Read sensor frequency from INFO file"""
-        import re
 
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
@@ -641,14 +733,46 @@ class MainWindow(QMainWindow):
         raise ValueError("Could not find sensor frequency in file")
 
     def add_data_files(self, files):
-        """Add data files"""
-        # Filter duplicates
-        new_files = [f for f in files if f not in self.data_files]
+        """Add data files with validation"""
+        # Validate each file before adding
+        valid_files = []
+        invalid_files = []
 
-        if not new_files:
+        for file_path in files:
+            # Skip duplicates
+            if file_path in self.data_files:
+                continue
+
+            # Validate file path
+            is_valid, error_msg = validate_file_path(file_path)
+            if not is_valid:
+                invalid_files.append((Path(file_path).name, error_msg))
+                continue
+
+            # Validate file size
+            is_valid, size_mb, error_msg = validate_file_size(file_path)
+            if not is_valid:
+                invalid_files.append((Path(file_path).name, error_msg))
+                continue
+
+            valid_files.append(file_path)
+
+        # Show warning for invalid files
+        if invalid_files:
+            error_summary = "\n".join([f"• {name}: {msg}" for name, msg in invalid_files[:5]])
+            if len(invalid_files) > 5:
+                error_summary += f"\n... and {len(invalid_files) - 5} more files"
+
+            QMessageBox.warning(
+                self,
+                "Invalid Files",
+                f"Some files could not be loaded:\n\n{error_summary}"
+            )
+
+        if not valid_files:
             return
 
-        self.data_files.extend(new_files)
+        self.data_files.extend(valid_files)
 
         # Update list
         self.data_list.clear()
@@ -992,7 +1116,6 @@ class VisualizationWindow(QMainWindow):
         ax.legend(loc='upper right')
 
         # Format x-axis with dates
-        import matplotlib.dates as mdates
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y'))
         ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
         fig.autofmt_xdate()
@@ -1141,7 +1264,6 @@ class VisualizationWindow(QMainWindow):
             status.setText("Copying Step1 to Step2...")
             QApplication.processEvents()
 
-            import shutil
             shutil.copy(step1_file, step2_file)
 
             # Process Zero Mean
@@ -1470,7 +1592,6 @@ class ManualRemovalWindow(QMainWindow):
 
     def create_interactive_plot(self, data, title, leg_type):
         """Create interactive matplotlib plot with click handler - full data with zoom"""
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # Taller figure for vertical layout
         fig = Figure(figsize=(14, 5), dpi=100)
@@ -1503,7 +1624,6 @@ class ManualRemovalWindow(QMainWindow):
         ax.legend(loc='upper right', fontsize=9)
 
         # Format dates - horizontal, no rotation
-        import matplotlib.dates as mdates
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         # Keep ticks horizontal
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
@@ -2010,7 +2130,6 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Perform FFT
-            from scipy.fftpack import fft, fftfreq
 
             sensor_freq = 8  # Hz
             s = fft(y)
@@ -2096,7 +2215,6 @@ class Step3FourierWindow(QMainWindow):
 
     def create_spectrum_plot(self):
         """Create two separate independent spectrum plots"""
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # ==============================================================================
         # PREPARE DATA
@@ -2299,7 +2417,6 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Inverse FFT
-            from scipy.fftpack import ifft
 
             y_transformed = ifft(s_filtered).real
 
@@ -2443,8 +2560,6 @@ class Step3FourierWindow(QMainWindow):
             window = WindowSize * 60 * Sensor_Frequency  # размер окна в точках
             n = int((len(y) - window) / (DeltaWindow * Sensor_Frequency))  # число окон
 
-            from scipy.fftpack import rfft, rfftfreq
-            from scipy.signal.windows import hann
 
             # ВАЖНО: rfftfreq с угловой частотой (рад/с)
             w = rfftfreq(window, (1 / Sensor_Frequency) / (2 * np.pi))
@@ -2501,7 +2616,6 @@ class Step3FourierWindow(QMainWindow):
 
     def show_spectrogram(self, z, w, WindowSize, DeltaWindow, n, part):
         """Display spectrogram in separate window with fullscreen capability"""
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # Create dialog window
         spectrogram_window = QDialog(self)
@@ -2557,7 +2671,6 @@ class Step3FourierWindow(QMainWindow):
 
     def show_comparison(self, data_transformed_viz, output_folder, progress_dialog, progress_bar, status):
         """Show before/after comparison"""
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # Load Step2 visualization (BEFORE Fourier transform)
         progress_bar.setValue(20)
@@ -2613,7 +2726,6 @@ class Step3FourierWindow(QMainWindow):
         ax.legend(loc='upper right')
 
         # Format dates
-        import matplotlib.dates as mdates
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
@@ -2803,7 +2915,6 @@ class Step4ProcessingWindow(QMainWindow):
 
     def create_interactive_plot(self, data):
         """Create interactive matplotlib plot with ALL reading boundaries"""
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         fig = Figure(figsize=(14, 6), dpi=100)
         canvas = FigureCanvas(fig)
@@ -2838,7 +2949,6 @@ class Step4ProcessingWindow(QMainWindow):
         ax.set_xlim(timestamps.iloc[0], timestamps.iloc[-1])
 
         # Format dates
-        import matplotlib.dates as mdates
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
@@ -2881,13 +2991,12 @@ class Step4ProcessingWindow(QMainWindow):
             try:
                 rms_text = self.rms_input.text().strip()
                 rms_threshold = float(rms_text)
-            except:
+            except (ValueError, AttributeError):
                 rms_threshold = 0.015
 
         # Helper functions for wave analysis
         def kh_solver(h, Tz):
             """Solve kh equation: x * tanh(x) = (4π²h)/(g*Tz²)"""
-            from scipy.optimize import fsolve
             g = 9.81
             target = (4 * np.pi**2 * h) / (g * Tz**2)
 
@@ -2901,8 +3010,6 @@ class Step4ProcessingWindow(QMainWindow):
 
         def calculate_spectrum_params(arr, sensor_freq=8):
             """Calculate spectral parameters: Q, nu, eps_width, rho"""
-            from scipy.fftpack import rfft, rfftfreq
-            from scipy.signal.windows import hann
 
             # FFT with Hann window
             mask = hann(len(arr))
@@ -2948,8 +3055,6 @@ class Step4ProcessingWindow(QMainWindow):
                 eps_width = 0
 
             # rho - amplitude to extrema ratio
-            from PyAstronomy import pyaC
-            from scipy.fftpack import irfft
 
             try:
                 y = irfft(rfft(arr)[ind])
@@ -2984,7 +3089,7 @@ class Step4ProcessingWindow(QMainWindow):
                         rho = 1
                 else:
                     rho = 0
-            except:
+            except (ZeroDivisionError, ValueError, TypeError):
                 rho = 0
 
             return Q, nu, eps_width, rho
@@ -3003,12 +3108,13 @@ class Step4ProcessingWindow(QMainWindow):
 
                 gamma = v * np.sqrt(np.abs(b) / abs(a))
                 return gamma
-            except:
+            except (ZeroDivisionError, ValueError, RuntimeWarning, FloatingPointError):
                 return 0
 
         def calculate_Tz(arr, sensor_freq=8):
             """Calculate mean zero-crossing period"""
-            from PyAstronomy import pyaC
+            if not HAS_PYASTRONOMY:
+                return 10.0  # Default if PyAstronomy not available
 
             try:
                 x = np.arange(len(arr))
@@ -3018,7 +3124,7 @@ class Step4ProcessingWindow(QMainWindow):
                 else:
                     Tz = 10.0  # Default
                 return Tz
-            except:
+            except (ImportError, AttributeError, ValueError):
                 return 10.0
 
         # Show progress dialog
@@ -3075,7 +3181,6 @@ class Step4ProcessingWindow(QMainWindow):
             # Storage for ALL new parameters
             new_params = []
 
-            import matplotlib.dates as mdates
 
             # Batch visualization
             batch_size = 10
@@ -3367,7 +3472,6 @@ class Step4ProcessingWindow(QMainWindow):
 
         except Exception as e:
             progress_dialog.close()
-            import traceback
             QMessageBox.critical(
                 self,
                 "Error",

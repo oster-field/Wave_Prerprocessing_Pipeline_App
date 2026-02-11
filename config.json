@@ -1,0 +1,34 @@
+{
+  "application": {
+    "name": "Wave Preprocessing Pipeline",
+    "version": "1.0.0",
+    "window_title": "🌊 Sakhalin Wave Processor"
+  },
+  "data_processing": {
+    "max_file_size_mb": 500,
+    "visualization_target_points": 5000,
+    "spectrum_target_points": 100000,
+    "default_sensor_frequency": 8,
+    "reading_duration_seconds": 1200
+  },
+  "file_formats": {
+    "info_extensions": [".dat", ".txt"],
+    "data_extensions": [".dat", ".txt", ".npy"],
+    "output_format": "csv"
+  },
+  "output": {
+    "directory": "Output",
+    "step1_filename": "Step1_TXTtoCSV.csv",
+    "visualization_cache": "Step1_Visualization.csv"
+  },
+  "performance": {
+    "chunk_size": 100000,
+    "parallel_processing": false,
+    "memory_limit_mb": 2048
+  },
+  "ui": {
+    "theme": "default",
+    "show_progress_dialog": true,
+    "enable_tooltips": true
+  }
+}
