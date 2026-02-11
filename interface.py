@@ -1859,27 +1859,29 @@ class Step3FourierWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Header
-        header = QLabel("Step 3: Fourier Transform - Remove Low Frequencies")
-        header.setFont(QFont("Arial", 18, QFont.Bold))
-        header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #2c3e50; padding: 15px;")
-        layout.addWidget(header)
+        # Spectrogram button at top
+        btn_spectrogram = QPushButton("📊 Plot Spectrogram")
+        btn_spectrogram.setStyleSheet("""
+            QPushButton {
+                background-color: #ff8c00;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 12px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #ff7700;
+            }
+        """)
+        btn_spectrogram.clicked.connect(self.plot_spectrogram)
+        layout.addWidget(btn_spectrogram)
 
-        # Instructions
-        instructions = QLabel(
-            "Click on the spectrum to set cutoff frequency. "
-            "All frequencies below the cutoff will be removed."
-        )
-        instructions.setAlignment(Qt.AlignCenter)
-        instructions.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
-        layout.addWidget(instructions)
-
-        # Graph placeholder
+        # Graph placeholder (will hold 2 graphs)
         self.graph_layout = QVBoxLayout()
         layout.addLayout(self.graph_layout)
 
-        # Button
+        # Apply button at bottom
         btn_layout = QHBoxLayout()
 
         self.btn_continue = QPushButton("▶️ Apply and Continue")
@@ -2093,78 +2095,158 @@ class Step3FourierWindow(QMainWindow):
             )
 
     def create_spectrum_plot(self):
-        """Create interactive spectrum plot"""
+        """Create two separate independent spectrum plots"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
-        fig = Figure(figsize=(14, 6), dpi=100)
-        canvas = FigureCanvas(fig)
+        # ==============================================================================
+        # PREPARE DATA
+        # ==============================================================================
 
-        ax = fig.add_subplot(111)
+        # Top graph: Visualization spectrum (subsampled) - Step3_Spectrum_Visualization.csv
+        magnitude_viz = np.sqrt(self.spectrum_viz_real**2 + self.spectrum_viz_imag**2)
+        pos_idx_viz = self.frequencies_viz >= 0
+        freq_viz = self.frequencies_viz[pos_idx_viz]
+        mag_viz = magnitude_viz[pos_idx_viz]
 
-        # Plot amplitude spectrum (positive frequencies only)
-        magnitude = np.sqrt(self.spectrum_viz_real**2 + self.spectrum_viz_imag**2)
+        # Bottom graph: Full spectrum (high resolution) - Step3_Spectrum.csv
+        # Filter to ω <= 0.1 rad/s AND exclude first point (ω=0)
+        magnitude_full = np.sqrt(self.spectrum_full.real**2 + self.spectrum_full.imag**2)
+        pos_idx_full = self.frequencies_full >= 0
+        freq_full = self.frequencies_full[pos_idx_full]
+        mag_full = magnitude_full[pos_idx_full]
 
-        # Filter to positive frequencies
-        pos_idx = self.frequencies_viz >= 0
-        freq_pos = self.frequencies_viz[pos_idx]
-        mag_pos = magnitude[pos_idx]
+        # Filter bottom graph to 0 < ω <= 0.1 rad/s (exclude ω=0)
+        zoom_idx = (freq_full > 0) & (freq_full <= 0.1)
+        freq_zoom = freq_full[zoom_idx]
+        mag_zoom = mag_full[zoom_idx]
 
-        ax.plot(freq_pos, mag_pos, linewidth=0.5, color='#3498db', alpha=0.7)
+        # ==============================================================================
+        # TOP GRAPH: Overview (Step3_Spectrum_Visualization.csv)
+        # Initial zoom: 0 to ω=3 rad/s
+        # ==============================================================================
 
-        ax.set_title('Fourier Spectrum - Click to set cutoff frequency',
-                    fontsize=12, fontweight='bold')
-        ax.set_xlabel('ω (rad/s)', fontsize=11)
-        ax.set_ylabel('Magnitude', fontsize=11)
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, max(freq_pos))
+        fig_top = Figure(figsize=(16, 4), dpi=100)
+        canvas_top = FigureCanvas(fig_top)
+        ax_top = fig_top.add_subplot(111)
 
-        fig.tight_layout()
+        ax_top.plot(freq_viz, mag_viz, linewidth=0.8, color='green', alpha=0.9)
+        ax_top.set_ylabel('Magnitude', fontsize=11)
+        ax_top.set_xlabel('ω (rad/s)', fontsize=10)
+        ax_top.grid(True, alpha=0.3)
 
-        # Store for later access
-        self.fig = fig
-        self.ax = ax
-        self.canvas = canvas
+        # Initial zoom: X: 0 to 3 rad/s, Y: 0 to auto
+        ax_top.set_xlim(0, 3.0)
+        ax_top.set_ylim(0, None)
 
-        # Click handler
+        fig_top.tight_layout()
+
+        toolbar_top = NavigationToolbar2QT(canvas_top, self)
+
+        # ==============================================================================
+        # BOTTOM GRAPH: Zoomed beginning (Step3_Spectrum.csv, ω <= 0.1 rad/s)
+        # Interactive - click to select cutoff
+        # ==============================================================================
+
+        fig_bottom = Figure(figsize=(16, 5), dpi=100)
+        canvas_bottom = FigureCanvas(fig_bottom)
+        ax_bottom = fig_bottom.add_subplot(111)
+
+        ax_bottom.plot(freq_zoom, mag_zoom, linewidth=0.8, color='green', alpha=0.9)
+        ax_bottom.set_xlabel('ω (rad/s)', fontsize=11, fontweight='bold')
+        ax_bottom.set_ylabel('Magnitude (log scale)', fontsize=11)
+        ax_bottom.set_yscale('log')  # Logarithmic Y axis
+        ax_bottom.grid(True, alpha=0.3, which='both')  # Grid for both major and minor ticks
+
+        # Tight to data: X: 0 to 0.1, Y: auto (log scale)
+        ax_bottom.set_xlim(0, 0.1)
+        # Don't set ylim for log scale - let matplotlib auto-scale
+
+        fig_bottom.tight_layout()
+
+        toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
+
+        # ==============================================================================
+        # CLICK HANDLER (only bottom graph)
+        # Click sets cutoff - everything BELOW (left of) cutoff is removed
+        # ==============================================================================
+
         self.cutoff_line = None
         self.shaded_region = None
+        self.cutoff_text = None  # Text annotation on top graph
 
         def on_click(event):
-            if event.inaxes == ax and event.button == 1:  # Left click
-                # Remove previous line and shading
+            if event.inaxes == ax_bottom and event.button == 1:  # Left click
+                # Remove previous
                 if self.cutoff_line:
                     self.cutoff_line.remove()
                 if self.shaded_region:
                     self.shaded_region.remove()
+                if self.cutoff_text:
+                    self.cutoff_text.remove()
 
-                # Draw vertical line at click
-                self.cutoff_line = ax.axvline(event.xdata, color='green',
-                                              linewidth=2, linestyle='--',
-                                              label='Cutoff', zorder=10)
+                clicked_omega = event.xdata
 
-                # Shade region to be removed (below cutoff)
-                self.shaded_region = ax.axvspan(0, event.xdata, alpha=0.3,
-                                               color='red', zorder=1,
-                                               label='To be removed')
+                # Draw vertical line at cutoff
+                self.cutoff_line = ax_bottom.axvline(clicked_omega, color='red',
+                                                     linewidth=2, linestyle='--',
+                                                     zorder=10)
 
-                canvas.draw()
+                # Shade region to be removed (LEFT of cutoff = low frequencies)
+                self.shaded_region = ax_bottom.axvspan(0, clicked_omega,
+                                                       alpha=0.3, color='red', zorder=1)
+
+                # Convert omega (rad/s) to period (minutes + seconds)
+                # T = 2π/ω (in seconds)
+                period_seconds = (2 * np.pi) / clicked_omega
+                period_minutes = int(period_seconds // 60)
+                period_secs = int(period_seconds % 60)
+
+                # Add text annotation to TOP graph (upper right corner)
+                cutoff_text = f"Cut-off > {period_minutes} min {period_secs} sec"
+                self.cutoff_text = ax_top.text(0.98, 0.95, cutoff_text,
+                                               transform=ax_top.transAxes,
+                                               fontsize=12,
+                                               verticalalignment='top',
+                                               horizontalalignment='right',
+                                               bbox=dict(boxstyle='round',
+                                                        facecolor='white',
+                                                        edgecolor='black',
+                                                        alpha=0.9))
+
+                canvas_bottom.draw()
+                canvas_top.draw()  # Redraw top graph to show text
 
                 # Store cutoff frequency
-                self.cutoff_freq = event.xdata
+                self.cutoff_freq = clicked_omega
                 self.btn_continue.setEnabled(True)
-                print(f"Cutoff frequency set to: {self.cutoff_freq:.4f} rad/s")
 
-        canvas.mpl_connect('button_press_event', on_click)
+                print(f"Cutoff frequency set to: {self.cutoff_freq:.4f} rad/s (Period: {period_minutes} min {period_secs} sec)")
 
-        # Add navigation toolbar
-        toolbar = NavigationToolbar2QT(canvas, self)
+        canvas_bottom.mpl_connect('button_press_event', on_click)
 
-        # Clear previous graph and add new one
+        # ==============================================================================
+        # ADD TO LAYOUT (like Step 2 - two independent graphs)
+        # ==============================================================================
+
+        # Clear previous
         for i in reversed(range(self.graph_layout.count())):
             self.graph_layout.itemAt(i).widget().setParent(None)
 
-        self.graph_layout.addWidget(toolbar)
-        self.graph_layout.addWidget(canvas)
+        # Add top graph
+        self.graph_layout.addWidget(toolbar_top)
+        self.graph_layout.addWidget(canvas_top)
+
+        # Add bottom graph
+        self.graph_layout.addWidget(toolbar_bottom)
+        self.graph_layout.addWidget(canvas_bottom)
+
+        # Store references
+        self.fig_top = fig_top
+        self.fig_bottom = fig_bottom
+        self.ax_top = ax_top
+        self.ax_bottom = ax_bottom
+        self.canvas_top = canvas_top
+        self.canvas_bottom = canvas_bottom
 
     def apply_transform(self):
         """Apply cutoff and perform inverse FFT"""
@@ -2304,6 +2386,174 @@ class Step3FourierWindow(QMainWindow):
                 "Error",
                 f"Transform failed:\n{str(e)}"
             )
+
+    def plot_spectrogram(self):
+        """
+        Compute and display windowed Fourier Transform (Spectrogram)
+        Based on 8_WindowFT.py algorithm
+        """
+        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+        output_folder = script_dir / "Output"
+        step2_file = output_folder / "Step2_Zero_Mean.csv"
+
+        # Show progress dialog
+        progress_dialog = QDialog(self)
+        progress_dialog.setWindowTitle("Computing Spectrogram")
+        progress_dialog.setModal(True)
+        progress_dialog.setFixedSize(500, 150)
+
+        layout = QVBoxLayout(progress_dialog)
+
+        label = QLabel("Computing windowed Fourier Transform...")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        layout.addWidget(progress_bar)
+
+        status = QLabel("Loading data...")
+        status.setAlignment(Qt.AlignCenter)
+        status.setStyleSheet("color: #7f8c8d;")
+        layout.addWidget(status)
+
+        progress_dialog.show()
+        QApplication.processEvents()
+
+        try:
+            # Load Step2_Zero_Mean data
+            progress_bar.setValue(10)
+            status.setText("Loading Step2_Zero_Mean.csv...")
+            QApplication.processEvents()
+
+            data = pd.read_csv(step2_file, comment='#')
+            y = data['pressure'].values
+
+            # Parameters from Article_WindowFT.py
+            WindowSize = 10  # минут
+            DeltaWindow = 60  # секунд
+            part = 20  # процент от спектра
+            Sensor_Frequency = 8  # Гц
+
+            progress_bar.setValue(20)
+            status.setText("Preparing window parameters...")
+            QApplication.processEvents()
+
+            # Compute window parameters
+            window = WindowSize * 60 * Sensor_Frequency  # размер окна в точках
+            n = int((len(y) - window) / (DeltaWindow * Sensor_Frequency))  # число окон
+
+            from scipy.fftpack import rfft, rfftfreq
+            from scipy.signal.windows import hann
+
+            # ВАЖНО: rfftfreq с угловой частотой (рад/с)
+            w = rfftfreq(window, (1 / Sensor_Frequency) / (2 * np.pi))
+            z = []
+
+            progress_bar.setValue(30)
+            status.setText(f"Computing {n} windows...")
+            QApplication.processEvents()
+
+            # Windowed FFT loop
+            for i in range(n):
+                # Update progress
+                if i % 10 == 0:
+                    progress_pct = 30 + int((i / n) * 60)
+                    progress_bar.setValue(progress_pct)
+                    status.setText(f"Processing window {i+1}/{n}...")
+                    QApplication.processEvents()
+
+                # Extract window
+                arr = y[i*DeltaWindow : window + i*DeltaWindow]
+
+                # Apply Hann window
+                mask = hann(len(arr))
+
+                # Compute FFT
+                s = np.abs(rfft(arr * mask))[0:int(len(w) * 0.01 * part)]
+
+                # Spectral density: (s²) / (len(arr) * max(w))
+                s = (s ** 2) / (len(arr) * np.max(w))
+
+                # Log scale
+                s = np.log10(s)
+
+                z.append(np.flip(s))
+
+            z = np.asarray(z)
+
+            progress_bar.setValue(95)
+            status.setText("Creating spectrogram plot...")
+            QApplication.processEvents()
+
+            progress_dialog.close()
+
+            # Create spectrogram window
+            self.show_spectrogram(z, w, WindowSize, DeltaWindow, n, part)
+
+        except Exception as e:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to compute spectrogram:\n{str(e)}"
+            )
+
+    def show_spectrogram(self, z, w, WindowSize, DeltaWindow, n, part):
+        """Display spectrogram in separate window with fullscreen capability"""
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
+        # Create dialog window
+        spectrogram_window = QDialog(self)
+        spectrogram_window.setWindowTitle("Spectrogram - Windowed Fourier Transform")
+
+        # Open in fullscreen immediately
+        spectrogram_window.showMaximized()
+
+        layout = QVBoxLayout(spectrogram_window)
+
+        # Create matplotlib figure
+        fig = Figure(figsize=(16, 10), dpi=100)
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+
+        # Plot spectrogram (log scale, gist_heat colormap, vmin=-10)
+        img = ax.imshow(
+            np.flip(np.flip(z).T),
+            extent=[0, WindowSize / 60 + n * DeltaWindow / 3600,
+                   0, w[int(len(w) * 0.01 * part)]],
+            cmap='gist_heat',
+            vmin=-10,
+            aspect='auto'
+        )
+
+        # Colorbar with custom label
+        colorbar = plt.colorbar(img, ax=ax, shrink=0.75)
+        colorbar.ax.set_ylabel('Spectral density, [m²/s]', size=16)
+        colorbar.ax.tick_params(labelsize=14)
+
+        # Set aspect ratio (from Article_WindowFT.py)
+        ratio = 0.25
+        x_left, x_right = ax.get_xlim()
+        y_low, y_high = ax.get_ylim()
+        ax.set_aspect(abs((x_right - x_left) / (y_low - y_high)) * ratio)
+
+        # Labels with larger fonts
+        ax.tick_params(labelsize=14)
+        ax.set_xlabel('t, [hours]', fontsize=16)
+        ax.set_ylabel('ω, [rad/s]', fontsize=16)
+
+        fig.tight_layout()
+
+        # Add toolbar
+        toolbar = NavigationToolbar2QT(canvas, spectrogram_window)
+
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas)
+
+        # Show window (non-modal, already maximized, can toggle fullscreen with F11)
+        spectrogram_window.setModal(False)
+        spectrogram_window.show()
 
     def show_comparison(self, data_transformed_viz, output_folder, progress_dialog, progress_bar, status):
         """Show before/after comparison"""
@@ -2877,7 +3127,7 @@ class Step4ProcessingWindow(QMainWindow):
                     QApplication.processEvents()
 
                 arr_data = reading_arrays[reading_num]
-                arr = arr_data['pressure']
+                arr = arr_data['pressure'].copy()  # ВАЖНО: .copy() для возможности модификации!
                 arr_indices = arr_data['indices']
                 arr_timestamps = arr_data['timestamps']
                 reading_start = arr_data['start']
