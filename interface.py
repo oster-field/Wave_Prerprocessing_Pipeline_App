@@ -158,72 +158,76 @@ class ProcessingThread(QThread):
             self.finished.emit(False, None)
 
     def read_info_file(self):
-        """Read metadata from INFO file"""
-        # Try different encodings
-        for encoding in ['windows-1251', 'utf-8', 'cp1251']:
+        """Read metadata from INFO file using regex - flexible parsing"""
+        content = None
+        for encoding in ['windows-1251', 'cp1251', 'utf-8', 'latin-1']:
             try:
                 with open(self.info_file, 'r', encoding=encoding, errors='ignore') as f:
-                    lines = f.readlines()
+                    content = f.read()
                 break
-            except:
+            except Exception:
                 continue
-        else:
-            with open(self.info_file, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
+        if content is None:
+            raise ValueError("Could not read INFO file with any encoding")
 
-        # Read dates (lines 5 and 7 - lines after "начала записи" and "окончания записи")
-        date_start = None
-        date_end = None
-        sensor_frequency = None
+        # Sensor frequency
+        freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
+                  or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
+        sensor_frequency = int(freq_match.group(1)) if freq_match else 8
 
-        try:
-            # Line 6 (0-indexed: 5) should have start date
-            if len(lines) > 5:
-                date_line = lines[5].strip()
-                if date_line and date_line[0].isdigit():
-                    date_start = datetime.datetime.strptime(date_line, '%Y.%m.%d %H:%M:%S.%f').date()
+        # Datetimes: "2022.10.18 11:47:48.000"
+        dt_pattern = re.compile(r'(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)')
+        found = dt_pattern.findall(content)
 
-            # Line 8 (0-indexed: 7) should have end date
-            if len(lines) > 7:
-                date_line = lines[7].strip()
-                if date_line and date_line[0].isdigit():
-                    date_end = datetime.datetime.strptime(date_line, '%Y.%m.%d %H:%M:%S.%f').date()
-        except Exception as e:
-            self.progress.emit(0, f"Warning: Could not parse dates - {str(e)}")
-
-        # Read frequency from line 3 (0-indexed: 2)
-        if len(lines) > 2:
-            numbers = re.findall(r'\d+', lines[2])
-            if numbers:
-                sensor_frequency = int(numbers[0])
-
-        if sensor_frequency is None:
-            sensor_frequency = 8  # Default
+        dt_start = dt_end = None
+        date_start = date_end = None
+        for s in found:
+            for fmt in ('%Y.%m.%d %H:%M:%S.%f', '%Y.%m.%d %H:%M:%S'):
+                try:
+                    dt = datetime.datetime.strptime(s.strip(), fmt)
+                    if dt_start is None:
+                        dt_start = dt
+                        date_start = dt.date()
+                    else:
+                        dt_end = dt
+                        date_end = dt.date()
+                    break
+                except ValueError:
+                    continue
 
         return {
-            'date_start': date_start,
-            'date_end': date_end,
-            'sensor_frequency': sensor_frequency
+            'date_start':       date_start,
+            'date_end':         date_end,
+            'dt_start':         dt_start,
+            'sensor_frequency': sensor_frequency,
         }
 
     def read_data_file(self, file_path):
-        """Read data from .dat/.txt/.npy file - optimized version"""
+        """Read data from .dat/.txt/.npy file"""
         file_ext = Path(file_path).suffix.lower()
 
         if file_ext == '.npy':
             return np.load(file_path)
         elif file_ext in ['.dat', '.txt']:
-            # Optimized reading - use numpy's faster methods
-            try:
-                # Try direct load with comma as decimal separator
-                return np.genfromtxt(file_path, delimiter='\n', encoding='utf-8')
-            except:
-                # Fallback: read and replace commas
-                with open(file_path, 'rb') as f:
-                    content = f.read().decode('utf-8', errors='ignore')
-                content = content.replace(',', '.')
-                # Use fromstring for speed
-                return np.fromstring(content, sep='\n')
+            # Read raw bytes and decode
+            with open(file_path, 'rb') as f:
+                content = f.read().decode('utf-8', errors='ignore')
+
+            # Replace comma decimal separator with dot (Russian locale files)
+            content = content.replace(',', '.')
+
+            # Parse line by line, skip empty and non-numeric lines
+            values = []
+            for line in content.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    values.append(float(line))
+                except ValueError:
+                    continue  # skip header/text lines
+
+            return np.array(values, dtype=np.float64)
         else:
             raise ValueError(f"Unsupported file format: {file_ext}")
 
@@ -420,7 +424,6 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """Инициализация интерфейса"""
         self.setWindowTitle("🌊 Sakhalin Wave Processor")
-        self.showMaximized()  # Fullscreen
 
         # Central widget
         central_widget = QWidget()
@@ -480,6 +483,9 @@ class MainWindow(QMainWindow):
         layout.addStretch()
 
         self.apply_global_styles()
+
+        # Show maximized AFTER UI is fully built
+        self.showMaximized()
 
     def create_info_section(self):
         """Section for INFO file"""
@@ -598,47 +604,98 @@ class MainWindow(QMainWindow):
             self.add_data_files(files)
 
     def set_info_file(self, file_path):
-        """Set INFO file"""
+        """Set INFO file and display parsed metadata"""
         self.info_file = file_path
         filename = Path(file_path).name
 
-        # Update UI
-        self.info_label.setText(f"✅ Loaded: {filename}")
-        self.info_label.setStyleSheet("color: #27ae60; font-weight: bold; padding: 5px;")
-        self.btn_clear_info.setEnabled(True)
-
-        # Try to read frequency from INFO
         try:
-            frequency = self.read_frequency_from_info(file_path)
-            self.info_label.setText(f"✅ Loaded: {filename}\n📡 Sensor frequency: {frequency} Hz")
-        except Exception as e:
-            self.info_label.setText(f"✅ Loaded: {filename}\n⚠️ Could not read frequency: {str(e)}")
+            meta = self._parse_info_file(file_path)
 
+            lines = [f"✅ {filename}"]
+            lines.append(f"📡 Frequency: {meta['sensor_frequency']} Hz")
+            if meta['dt_start']:
+                lines.append(f"🕐 Start:  {meta['dt_start'].strftime('%Y-%m-%d  %H:%M:%S')}")
+            if meta['dt_end']:
+                lines.append(f"🕑 End:    {meta['dt_end'].strftime('%Y-%m-%d  %H:%M:%S')}")
+            if meta['recording_duration']:
+                lines.append(f"⏱  Duration: {meta['recording_duration']}")
+            if meta['total_measurements']:
+                lines.append(f"📊 Measurements: {meta['total_measurements']:,}")
+
+            self.info_label.setText("\n".join(lines))
+            self.info_label.setStyleSheet(
+                "color: #27ae60; font-weight: bold; padding: 5px; font-family: monospace;"
+            )
+        except Exception as e:
+            self.info_label.setText(f"✅ Loaded: {filename}\n⚠️ Parse error: {str(e)}")
+            self.info_label.setStyleSheet("color: #e67e22; font-weight: bold; padding: 5px;")
+
+        self.btn_clear_info.setEnabled(True)
         self.update_status()
 
-    def read_frequency_from_info(self, file_path):
-        """Read sensor frequency from INFO file"""
-        import re
+    def _parse_info_file(self, file_path):
+        """Parse INFO file with regex - handles any encoding, flexible format"""
+        content = None
+        for encoding in ['windows-1251', 'cp1251', 'utf-8', 'latin-1']:
+            try:
+                with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
+                    content = f.read()
+                break
+            except Exception:
+                continue
+        if content is None:
+            raise ValueError("Cannot read file")
 
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
+        # Sensor frequency
+        freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
+                  or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
+        sensor_frequency = int(freq_match.group(1)) if freq_match else 8
 
-        # Look for line with frequency (usually in line 2-3)
-        for line in lines[:10]:  # Check first 10 lines
-            # Find numbers in line
-            numbers = re.findall(r'\d+', line)
-            # Look for keywords
-            if any(keyword in line.lower() for keyword in ['частота', 'frequency', 'герц', 'hz', 'гц']):
-                if numbers:
-                    return int(numbers[0])
+        # Datetimes: "2022.10.18 11:47:48.000"
+        dt_pattern = re.compile(r'(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)')
+        found = dt_pattern.findall(content)
 
-        # If not found by keywords, try line 3 (as in original)
-        if len(lines) >= 3:
-            numbers = re.findall(r'\d+', lines[2])
-            if numbers:
-                return int(numbers[0])
+        dt_start = dt_end = None
+        for s in found:
+            for fmt in ('%Y.%m.%d %H:%M:%S.%f', '%Y.%m.%d %H:%M:%S'):
+                try:
+                    dt = datetime.datetime.strptime(s.strip(), fmt)
+                    if dt_start is None:
+                        dt_start = dt
+                    else:
+                        dt_end = dt
+                    break
+                except ValueError:
+                    continue
 
-        raise ValueError("Could not find sensor frequency in file")
+        # Duration
+        recording_duration = None
+        if dt_start and dt_end:
+            delta = dt_end - dt_start
+            total_s = int(delta.total_seconds())
+            days    = delta.days
+            hours   = (total_s % 86400) // 3600
+            mins    = (total_s % 3600)  // 60
+            secs    = total_s % 60
+            recording_duration = (
+                f"{days}d {hours:02d}h {mins:02d}m {secs:02d}s"
+                if days > 0 else
+                f"{hours:02d}h {mins:02d}m {secs:02d}s"
+            )
+
+        # Total measurements
+        meas_match = re.search(r'[Кк]оличество\s+измерений[^:]*:\s*(\d+)', content)
+        total_measurements = int(meas_match.group(1)) if meas_match else None
+
+        return {
+            'sensor_frequency':   sensor_frequency,
+            'dt_start':           dt_start,
+            'dt_end':             dt_end,
+            'date_start':         dt_start.date() if dt_start else None,
+            'date_end':           dt_end.date()   if dt_end   else None,
+            'recording_duration': recording_duration,
+            'total_measurements': total_measurements,
+        }
 
     def add_data_files(self, files):
         """Add data files"""
@@ -874,8 +931,11 @@ class VisualizationWindow(QMainWindow):
         info_label.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
         layout.addWidget(info_label)
 
-        # Plot canvas
+        # Plot canvas with interactive toolbar
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         self.canvas = self.create_plot()
+        toolbar = NavigationToolbar2QT(self.canvas, self)
+        layout.addWidget(toolbar)
         layout.addWidget(self.canvas)
 
         # Buttons
@@ -1299,6 +1359,8 @@ class ManualRemovalWindow(QMainWindow):
         # Detect dives on visualization data
         self.detect_dive_legs()
 
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+
         # Beginning dive plot (DEPLOYMENT)
         if self.beginning_data is not None:
             beginning_group = QGroupBox("🔻 Sensor Deployment")
@@ -1308,9 +1370,11 @@ class ManualRemovalWindow(QMainWindow):
                 "Deployment - Click to mark cut point",
                 'beginning'
             )
+            beginning_toolbar = NavigationToolbar2QT(self.beginning_canvas, self)
+            beginning_layout.addWidget(beginning_toolbar)
             beginning_layout.addWidget(self.beginning_canvas)
             beginning_group.setLayout(beginning_layout)
-            layout.addWidget(beginning_group, stretch=1)  # Equal vertical space
+            layout.addWidget(beginning_group, stretch=1)
 
         # Ending dive plot (RETRIEVAL)
         if self.ending_data is not None:
@@ -1321,9 +1385,11 @@ class ManualRemovalWindow(QMainWindow):
                 "Retrieval - Click to mark cut point",
                 'ending'
             )
+            ending_toolbar = NavigationToolbar2QT(self.ending_canvas, self)
+            ending_layout.addWidget(ending_toolbar)
             ending_layout.addWidget(self.ending_canvas)
             ending_group.setLayout(ending_layout)
-            layout.addWidget(ending_group, stretch=1)  # Equal vertical space
+            layout.addWidget(ending_group, stretch=1)
 
         # Buttons
         btn_layout = QHBoxLayout()
