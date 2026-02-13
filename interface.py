@@ -7,7 +7,8 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
                              QListWidget, QGroupBox, QMessageBox, QDialog,
-                             QProgressBar, QTextEdit, QCheckBox, QLineEdit)
+                             QProgressBar, QTextEdit, QCheckBox, QLineEdit,
+                             QSpinBox)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent
 from pathlib import Path
@@ -34,6 +35,29 @@ VISUALIZATION_TARGET_POINTS = 5000
 # because frequency domain requires finer resolution
 SPECTRUM_TARGET_POINTS = 100000
 # ==============================================================================
+
+
+def read_sensor_freq_from_csv(csv_path, default=8):
+    """Read sensor frequency from CSV comment header. Returns int Hz."""
+    try:
+        with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if not line.startswith('#'):
+                    break
+                m = re.search(r'[Ss]ensor\s+frequenc[a-z]*[^:]*:\s*(\d+)', line)
+                if m:
+                    return int(m.group(1))
+    except Exception:
+        pass
+    return default
+
+
+def _lbl(text, style=""):
+    """Convenience: create a plain QLabel with optional stylesheet."""
+    w = QLabel(text)
+    if style:
+        w.setStyleSheet(style)
+    return w
 
 
 class ProcessingThread(QThread):
@@ -335,21 +359,6 @@ class ProgressDialog(QDialog):
             }
         """)
         layout.addWidget(self.log_text)
-
-        # Cancel button
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
-        layout.addWidget(self.btn_cancel)
 
     def update_progress(self, percentage, message):
         """Update progress bar and message"""
@@ -763,19 +772,9 @@ class MainWindow(QMainWindow):
         self.processing_thread.progress.connect(self.progress_dialog.update_progress)
         self.processing_thread.finished.connect(self.on_processing_finished)
 
-        # Connect cancel button
-        self.progress_dialog.btn_cancel.clicked.connect(self.cancel_processing)
-
         # Start processing
         self.processing_thread.start()
         self.progress_dialog.exec_()
-
-    def cancel_processing(self):
-        """Cancel the processing"""
-        if hasattr(self, 'processing_thread'):
-            self.processing_thread.stop()
-        if hasattr(self, 'progress_dialog'):
-            self.progress_dialog.close()
 
     def on_processing_finished(self, success, result_df):
         """Called when processing is complete"""
@@ -941,10 +940,10 @@ class VisualizationWindow(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        self.btn_manual = QPushButton("✏️ Proceed with Manual Data Removal")
-        self.btn_manual.setStyleSheet("""
+        self.btn_skip = QPushButton("⏭️ Continue without Manual Removal")
+        self.btn_skip.setStyleSheet("""
             QPushButton {
-                background-color: #3498db;
+                background-color: #e74c3c;
                 color: white;
                 font-size: 14px;
                 font-weight: bold;
@@ -952,14 +951,14 @@ class VisualizationWindow(QMainWindow):
                 border-radius: 5px;
             }
             QPushButton:hover {
-                background-color: #2980b9;
+                background-color: #c0392b;
             }
         """)
-        self.btn_manual.clicked.connect(self.on_manual_removal)
-        btn_layout.addWidget(self.btn_manual)
+        self.btn_skip.clicked.connect(self.on_skip_removal)
+        btn_layout.addWidget(self.btn_skip)
 
-        self.btn_skip = QPushButton("⏭️ Continue without Manual Removal")
-        self.btn_skip.setStyleSheet("""
+        self.btn_manual = QPushButton("✏️ Proceed with Manual Data Removal")
+        self.btn_manual.setStyleSheet("""
             QPushButton {
                 background-color: #27ae60;
                 color: white;
@@ -972,8 +971,8 @@ class VisualizationWindow(QMainWindow):
                 background-color: #229954;
             }
         """)
-        self.btn_skip.clicked.connect(self.on_skip_removal)
-        btn_layout.addWidget(self.btn_skip)
+        self.btn_manual.clicked.connect(self.on_manual_removal)
+        btn_layout.addWidget(self.btn_manual)
 
         layout.addLayout(btn_layout)
 
@@ -1014,7 +1013,7 @@ class VisualizationWindow(QMainWindow):
         dive_mask = self.detect_dives(data_to_plot['pressure'].values)
 
         # Convert timestamps
-        timestamps = pd.to_datetime(data_to_plot['timestamp'])
+        timestamps = pd.to_datetime(data_to_plot['timestamp'], errors='coerce')
         pressure = data_to_plot['pressure'].values
 
         # FIRST: Draw complete blue line (no gaps)
@@ -1359,8 +1358,6 @@ class ManualRemovalWindow(QMainWindow):
         # Detect dives on visualization data
         self.detect_dive_legs()
 
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
-
         # Beginning dive plot (DEPLOYMENT)
         if self.beginning_data is not None:
             beginning_group = QGroupBox("🔻 Sensor Deployment")
@@ -1370,8 +1367,6 @@ class ManualRemovalWindow(QMainWindow):
                 "Deployment - Click to mark cut point",
                 'beginning'
             )
-            beginning_toolbar = NavigationToolbar2QT(self.beginning_canvas, self)
-            beginning_layout.addWidget(beginning_toolbar)
             beginning_layout.addWidget(self.beginning_canvas)
             beginning_group.setLayout(beginning_layout)
             layout.addWidget(beginning_group, stretch=1)
@@ -1385,8 +1380,6 @@ class ManualRemovalWindow(QMainWindow):
                 "Retrieval - Click to mark cut point",
                 'ending'
             )
-            ending_toolbar = NavigationToolbar2QT(self.ending_canvas, self)
-            ending_layout.addWidget(ending_toolbar)
             ending_layout.addWidget(self.ending_canvas)
             ending_group.setLayout(ending_layout)
             layout.addWidget(ending_group, stretch=1)
@@ -1410,23 +1403,6 @@ class ManualRemovalWindow(QMainWindow):
         """)
         btn_save.clicked.connect(self.save_trimmed_data)
         btn_layout.addWidget(btn_save)
-
-        btn_cancel = QPushButton("❌ Cancel")
-        btn_cancel.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
-        btn_cancel.clicked.connect(self.close)
-        btn_layout.addWidget(btn_cancel)
 
         layout.addLayout(btn_layout)
 
@@ -1712,7 +1688,7 @@ class ManualRemovalWindow(QMainWindow):
 
             # Read full data
             full_data = pd.read_csv(csv_file, comment='#')
-            full_data['timestamp'] = pd.to_datetime(full_data['timestamp'])
+            full_data['timestamp'] = pd.to_datetime(full_data['timestamp'], errors='coerce')
 
             progress_bar.setValue(40)
             status.setText("Converting indices from visualization to full data...")
@@ -1909,11 +1885,11 @@ class Step3FourierWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.spectrum_full = None
+        self.spectrum_full    = None   # S(ω) — for plotting
+        self.rfft_full        = None   # raw complex rfft(y) — for irfft in apply_transform
         self.frequencies_full = None
-        self.cutoff_freq = None
+        self.cutoff_freq      = None
         self.init_ui()
-        # Don't show yet - wait until data is loaded
         self.load_and_transform()
 
     def init_ui(self):
@@ -1925,23 +1901,87 @@ class Step3FourierWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Spectrogram button at top
-        btn_spectrogram = QPushButton("📊 Plot Spectrogram")
+        # ── Top bar: spectrogram parameters + button ─────────────────────
+        # Outer container with card-style background
+        top_card = QWidget()
+        top_card.setStyleSheet("""
+            QWidget {
+                background-color: #f0f3f7;
+                border: 1px solid #d5dce8;
+                border-radius: 8px;
+            }
+        """)
+        top_card.setFixedHeight(56)
+        top_bar = QHBoxLayout(top_card)
+        top_bar.setContentsMargins(16, 0, 16, 0)
+        top_bar.setSpacing(8)
+
+        lbl_style = (
+            "font-size: 13px; color: #34495e; background: transparent; border: none;"
+        )
+        spin_style = """
+            QSpinBox {
+                font-size: 13px;
+                font-weight: bold;
+                color: #2c3e50;
+                background: white;
+                padding: 3px 6px;
+                border: 1.5px solid #b0bec5;
+                border-radius: 5px;
+                min-width: 72px;
+            }
+            QSpinBox:focus { border-color: #ff8c00; }
+        """
+
+        # Window size
+        top_bar.addWidget(_lbl("Window FT:", lbl_style))
+        self.spin_window = QSpinBox()
+        self.spin_window.setRange(1, 120)
+        self.spin_window.setValue(10)
+        self.spin_window.setSuffix(" min")
+        self.spin_window.setStyleSheet(spin_style)
+        self.spin_window.setFixedHeight(32)
+        top_bar.addWidget(self.spin_window)
+
+        top_bar.addWidget(_lbl("shift", lbl_style))
+        self.spin_delta = QSpinBox()
+        self.spin_delta.setRange(1, 600)
+        self.spin_delta.setValue(60)
+        self.spin_delta.setSuffix(" sec")
+        self.spin_delta.setStyleSheet(spin_style)
+        self.spin_delta.setFixedHeight(32)
+        top_bar.addWidget(self.spin_delta)
+
+        top_bar.addWidget(_lbl("spectrum", lbl_style))
+        self.spin_part = QSpinBox()
+        self.spin_part.setRange(1, 100)
+        self.spin_part.setValue(20)
+        self.spin_part.setSuffix(" %")
+        self.spin_part.setStyleSheet(spin_style)
+        self.spin_part.setFixedHeight(32)
+        top_bar.addWidget(self.spin_part)
+
+        # Spectrogram button — right after the last spinbox
+        btn_spectrogram = QPushButton("  📊  Plot Spectrogram")
+        btn_spectrogram.setFixedHeight(36)
         btn_spectrogram.setStyleSheet("""
             QPushButton {
                 background-color: #ff8c00;
                 color: white;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
-                padding: 12px;
-                border-radius: 5px;
+                padding: 0 18px;
+                border-radius: 6px;
+                border: none;
             }
-            QPushButton:hover {
-                background-color: #ff7700;
-            }
+            QPushButton:hover  { background-color: #e67e00; }
+            QPushButton:pressed{ background-color: #cc6f00; }
         """)
         btn_spectrogram.clicked.connect(self.plot_spectrogram)
-        layout.addWidget(btn_spectrogram)
+        top_bar.addWidget(btn_spectrogram)
+
+        top_bar.addStretch()
+        layout.addWidget(top_card)
 
         # Graph placeholder (will hold 2 graphs)
         self.graph_layout = QVBoxLayout()
@@ -2013,9 +2053,8 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             spectrum_df = pd.read_csv(step3_spectrum_viz, comment='#')
-            self.frequencies_viz = spectrum_df['frequency'].values
-            self.spectrum_viz_real = spectrum_df['real'].values
-            self.spectrum_viz_imag = spectrum_df['imag'].values
+            self.frequencies_viz   = spectrum_df['frequency'].values
+            self.spectrum_viz_real = spectrum_df['spectral_density'].values
 
             progress_bar.setValue(60)
             status.setText("Loading full spectrum...")
@@ -2024,7 +2063,7 @@ class Step3FourierWindow(QMainWindow):
             # Load full spectrum
             spectrum_full_df = pd.read_csv(step3_spectrum, comment='#')
             self.frequencies_full = spectrum_full_df['frequency'].values
-            self.spectrum_full = spectrum_full_df['real'].values + 1j * spectrum_full_df['imag'].values
+            self.spectrum_full    = spectrum_full_df['spectral_density'].values
 
             progress_bar.setValue(90)
             status.setText("Creating plot...")
@@ -2071,46 +2110,56 @@ class Step3FourierWindow(QMainWindow):
             data = pd.read_csv(step2_file, comment='#')
             y = data['pressure'].values
 
+            # Read sensor frequency from Step2 metadata header
+            sensor_freq = read_sensor_freq_from_csv(step2_file)
+
             progress_bar.setValue(30)
-            status.setText(f"Computing FFT for {len(y):,} points...")
+            status.setText(f"Computing FFT for {len(y):,} points (sensor freq: {sensor_freq} Hz)...")
             QApplication.processEvents()
 
-            # Perform FFT
-            from scipy.fftpack import fft, fftfreq
+            # Perform rfft (one-sided, as in Article_Spectras.py)
+            from scipy.fftpack import rfft, rfftfreq
 
-            sensor_freq = 8  # Hz
-            s = fft(y)
-            x = fftfreq(len(y), (1 / sensor_freq) / (2 * np.pi))  # Angular frequency
+            N_signal = len(y)
+            s_raw    = np.abs(rfft(y))
+            x = rfftfreq(N_signal, (1 / sensor_freq) / (2 * np.pi))
+
+            # Store raw complex rfft for irfft in apply_transform
+            from scipy.fftpack import rfft as rfft_complex
+            self.rfft_full = rfft_complex(y)   # complex, shape (N,)
+
+            # S(ω) = |rfft|² / (N · max(ω))   — exactly as in Article_Spectras.py
+            s = (s_raw ** 2) / (N_signal * np.max(x))
 
             progress_bar.setValue(60)
             status.setText("Saving full spectrum...")
             QApplication.processEvents()
 
-            # Save full spectrum
+            # Save full spectrum — s is now real-valued S(ω)
             spectrum_df = pd.DataFrame({
                 'frequency': x,
-                'real': s.real,
-                'imag': s.imag
+                'spectral_density': s
             })
 
             with open(step3_spectrum, 'w', encoding='utf-8') as f:
-                f.write("# STEP 3: Full Fourier Spectrum\n")
+                f.write("# STEP 3: Full Fourier Spectrum — S(ω) = |rfft|²/(N·max(ω))\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Total points: {len(x)}\n")
                 f.write(f"# Sensor frequency: {sensor_freq} Hz\n")
+                f.write(f"# N_signal: {N_signal}\n")
                 f.write("# ==========================================\n")
 
             spectrum_df.to_csv(step3_spectrum, mode='a', index=False)
 
-            self.spectrum_full = s
+            self.spectrum_full    = s   # S(ω), real array
             self.frequencies_full = x
 
             progress_bar.setValue(75)
             status.setText("Creating visualization...")
             QApplication.processEvents()
 
-            # Subsample for visualization (много точек для детального спектра)
-            target_points = SPECTRUM_TARGET_POINTS  # 100k points for detailed spectrum
+            # Subsample for visualization
+            target_points = SPECTRUM_TARGET_POINTS
             step = max(1, len(x) // target_points)
 
             x_viz = x[::step]
@@ -2119,8 +2168,7 @@ class Step3FourierWindow(QMainWindow):
             # Save visualization
             viz_df = pd.DataFrame({
                 'frequency': x_viz,
-                'real': s_viz.real,
-                'imag': s_viz.imag
+                'spectral_density': s_viz
             })
 
             progress_bar.setValue(85)
@@ -2136,9 +2184,8 @@ class Step3FourierWindow(QMainWindow):
 
             viz_df.to_csv(step3_spectrum_viz, mode='a', index=False)
 
-            self.frequencies_viz = x_viz
-            self.spectrum_viz_real = s_viz.real
-            self.spectrum_viz_imag = s_viz.imag
+            self.frequencies_viz    = x_viz
+            self.spectrum_viz_real  = s_viz   # S(ω), real
 
             progress_bar.setValue(95)
             status.setText("Preparing plot...")
@@ -2161,74 +2208,65 @@ class Step3FourierWindow(QMainWindow):
             )
 
     def create_spectrum_plot(self):
-        """Create two separate independent spectrum plots"""
+        """Create two separate independent spectrum plots with S(ω) spectral density"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # ==============================================================================
-        # PREPARE DATA
+        # DATA — spectrum_full and spectrum_viz_real are already S(ω) [m²/s]
+        # computed as: S(ω) = |rfft|² / (N_signal · max(ω))
+        # rfft gives only positive frequencies, so no filtering needed
         # ==============================================================================
+        from matplotlib import ticker as mticker
 
-        # Top graph: Visualization spectrum (subsampled) - Step3_Spectrum_Visualization.csv
-        magnitude_viz = np.sqrt(self.spectrum_viz_real**2 + self.spectrum_viz_imag**2)
-        pos_idx_viz = self.frequencies_viz >= 0
-        freq_viz = self.frequencies_viz[pos_idx_viz]
-        mag_viz = magnitude_viz[pos_idx_viz]
+        # Top graph: subsampled S(ω) — all frequencies up to Nyquist
+        freq_viz = self.frequencies_viz          # all positive, rfft output
+        s_viz    = self.spectrum_viz_real
 
-        # Bottom graph: Full spectrum (high resolution) - Step3_Spectrum.csv
-        # Filter to ω <= 0.1 rad/s AND exclude first point (ω=0)
-        magnitude_full = np.sqrt(self.spectrum_full.real**2 + self.spectrum_full.imag**2)
-        pos_idx_full = self.frequencies_full >= 0
-        freq_full = self.frequencies_full[pos_idx_full]
-        mag_full = magnitude_full[pos_idx_full]
-
-        # Filter bottom graph to 0 < ω <= 0.1 rad/s (exclude ω=0)
-        zoom_idx = (freq_full > 0) & (freq_full <= 0.1)
+        # Bottom graph: full-resolution S(ω), low-frequency zoom 0 < ω ≤ 0.1
+        freq_full = self.frequencies_full
+        s_full    = self.spectrum_full
+        zoom_idx  = (freq_full > 0) & (freq_full <= 0.1)
         freq_zoom = freq_full[zoom_idx]
-        mag_zoom = mag_full[zoom_idx]
+        s_zoom    = s_full[zoom_idx]
 
         # ==============================================================================
-        # TOP GRAPH: Overview (Step3_Spectrum_Visualization.csv)
-        # Initial zoom: 0 to ω=3 rad/s
+        # TOP GRAPH — S(ω) overview, xlim [0, 2] exactly as in Article_Spectras.py
         # ==============================================================================
-
         fig_top = Figure(figsize=(16, 4), dpi=100)
         canvas_top = FigureCanvas(fig_top)
         ax_top = fig_top.add_subplot(111)
 
-        ax_top.plot(freq_viz, mag_viz, linewidth=0.8, color='green', alpha=0.9)
-        ax_top.set_ylabel('Magnitude', fontsize=11)
-        ax_top.set_xlabel('ω (rad/s)', fontsize=10)
-        ax_top.grid(True, alpha=0.3)
-
-        # Initial zoom: X: 0 to 3 rad/s, Y: 0 to auto
-        ax_top.set_xlim(0, 3.0)
+        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color='#007241', alpha=0.95)
+        ax_top.set_xlabel('ω, [rad/s]', fontsize=13)
+        ax_top.set_ylabel('S(ω), [m²/s]', fontsize=13)
+        ax_top.tick_params(labelsize=11)
+        ax_top.set_xlim(0, 2.0)
         ax_top.set_ylim(0, None)
+        ax_top.grid(axis='y', alpha=0.4)          # grid only on Y — как в статье
+        ax_top.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:.4f}"))
 
         fig_top.tight_layout()
-
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
 
         # ==============================================================================
-        # BOTTOM GRAPH: Zoomed beginning (Step3_Spectrum.csv, ω <= 0.1 rad/s)
-        # Interactive - click to select cutoff
+        # BOTTOM GRAPH — S(ω) low-frequency zoom (0 < ω ≤ 0.1), log Y scale,
+        # interactive click to set cutoff
         # ==============================================================================
-
         fig_bottom = Figure(figsize=(16, 5), dpi=100)
         canvas_bottom = FigureCanvas(fig_bottom)
         ax_bottom = fig_bottom.add_subplot(111)
 
-        ax_bottom.plot(freq_zoom, mag_zoom, linewidth=0.8, color='green', alpha=0.9)
-        ax_bottom.set_xlabel('ω (rad/s)', fontsize=11, fontweight='bold')
-        ax_bottom.set_ylabel('Magnitude (log scale)', fontsize=11)
-        ax_bottom.set_yscale('log')  # Logarithmic Y axis
-        ax_bottom.grid(True, alpha=0.3, which='both')  # Grid for both major and minor ticks
-
-        # Tight to data: X: 0 to 0.1, Y: auto (log scale)
+        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color='#007241', alpha=0.95)
+        ax_bottom.set_xlabel('ω, [rad/s]', fontsize=13)
+        ax_bottom.set_ylabel('S(ω), [m²/s]', fontsize=13)
+        ax_bottom.tick_params(labelsize=11)
         ax_bottom.set_xlim(0, 0.1)
-        # Don't set ylim for log scale - let matplotlib auto-scale
+        ax_bottom.set_ylim(bottom=None)
+        ax_bottom.set_yscale('log')
+        ax_bottom.grid(axis='y', alpha=0.4, which='both')
+        ax_bottom.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:.2e}"))
 
         fig_bottom.tight_layout()
-
         toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
 
         # ==============================================================================
@@ -2267,10 +2305,10 @@ class Step3FourierWindow(QMainWindow):
                 period_minutes = int(period_seconds // 60)
                 period_secs = int(period_seconds % 60)
 
-                # Add text annotation to TOP graph (upper right corner)
+                # Add text annotation to BOTTOM graph (upper right corner)
                 cutoff_text = f"Cut-off > {period_minutes} min {period_secs} sec"
-                self.cutoff_text = ax_top.text(0.98, 0.95, cutoff_text,
-                                               transform=ax_top.transAxes,
+                self.cutoff_text = ax_bottom.text(0.98, 0.95, cutoff_text,
+                                               transform=ax_bottom.transAxes,
                                                fontsize=12,
                                                verticalalignment='top',
                                                horizontalalignment='right',
@@ -2280,7 +2318,6 @@ class Step3FourierWindow(QMainWindow):
                                                         alpha=0.9))
 
                 canvas_bottom.draw()
-                canvas_top.draw()  # Redraw top graph to show text
 
                 # Store cutoff frequency
                 self.cutoff_freq = clicked_omega
@@ -2348,26 +2385,36 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            # Apply cutoff filter
+            # Apply cutoff filter on the raw complex rfft
             progress_bar.setValue(20)
             status.setText("Applying frequency filter...")
             QApplication.processEvents()
 
-            s_filtered = self.spectrum_full.copy()
+            # If rfft_full is not in memory (loaded from cache), recompute from Step2
+            if self.rfft_full is None:
+                from scipy.fftpack import rfft as rfft_complex, rfftfreq
+                step2_file_tmp = output_folder / "Step2_Zero_Mean.csv"
+                y_tmp = pd.read_csv(step2_file_tmp, comment='#')['pressure'].values
+                sensor_freq_tmp = read_sensor_freq_from_csv(step2_file_tmp)
+                self.rfft_full = rfft_complex(y_tmp)
+                self.frequencies_full = rfftfreq(len(y_tmp),
+                                                  (1 / sensor_freq_tmp) / (2 * np.pi))
 
-            # Remove frequencies below cutoff
+            s_filtered = self.rfft_full.copy()
+
+            # Zero out frequencies below cutoff (rfft frequencies are all positive)
             for i in range(len(self.frequencies_full)):
-                if abs(self.frequencies_full[i]) < self.cutoff_freq:
-                    s_filtered[i] = 0 + 0j
+                if self.frequencies_full[i] < self.cutoff_freq:
+                    s_filtered[i] = 0.0
 
             progress_bar.setValue(40)
             status.setText("Computing inverse FFT...")
             QApplication.processEvents()
 
-            # Inverse FFT
-            from scipy.fftpack import ifft
+            # Inverse rfft
+            from scipy.fftpack import irfft
 
-            y_transformed = ifft(s_filtered).real
+            y_transformed = irfft(s_filtered)
 
             progress_bar.setValue(60)
             status.setText("Saving transformed data...")
@@ -2495,11 +2542,11 @@ class Step3FourierWindow(QMainWindow):
             data = pd.read_csv(step2_file, comment='#')
             y = data['pressure'].values
 
-            # Parameters from Article_WindowFT.py
-            WindowSize = 10  # минут
-            DeltaWindow = 60  # секунд
-            part = 20  # процент от спектра
-            Sensor_Frequency = 8  # Гц
+            # Parameters from UI spinboxes
+            WindowSize = self.spin_window.value()   # минут
+            DeltaWindow = self.spin_delta.value()   # секунд
+            part = self.spin_part.value()            # процент от спектра
+            Sensor_Frequency = read_sensor_freq_from_csv(step2_file)
 
             progress_bar.setValue(20)
             status.setText("Preparing window parameters...")
@@ -2514,6 +2561,10 @@ class Step3FourierWindow(QMainWindow):
 
             # ВАЖНО: rfftfreq с угловой частотой (рад/с)
             w = rfftfreq(window, (1 / Sensor_Frequency) / (2 * np.pi))
+            # Number of spectrum points to keep (slice [0:spec_len] is always valid)
+            # spec_idx is used only for w[spec_idx] — must be < len(w)
+            spec_len = int(len(w) * 0.01 * part)          # может равняться len(w) при 100%
+            spec_idx = min(spec_len, len(w) - 1)           # безопасный индекс для w[]
             z = []
 
             progress_bar.setValue(30)
@@ -2536,7 +2587,7 @@ class Step3FourierWindow(QMainWindow):
                 mask = hann(len(arr))
 
                 # Compute FFT
-                s = np.abs(rfft(arr * mask))[0:int(len(w) * 0.01 * part)]
+                s = np.abs(rfft(arr * mask))[0:spec_len]
 
                 # Spectral density: (s²) / (len(arr) * max(w))
                 s = (s ** 2) / (len(arr) * np.max(w))
@@ -2555,7 +2606,7 @@ class Step3FourierWindow(QMainWindow):
             progress_dialog.close()
 
             # Create spectrogram window
-            self.show_spectrogram(z, w, WindowSize, DeltaWindow, n, part)
+            self.show_spectrogram(z, w, WindowSize, DeltaWindow, n, spec_len, spec_idx)
 
         except Exception as e:
             progress_dialog.close()
@@ -2565,20 +2616,16 @@ class Step3FourierWindow(QMainWindow):
                 f"Failed to compute spectrogram:\n{str(e)}"
             )
 
-    def show_spectrogram(self, z, w, WindowSize, DeltaWindow, n, part):
+    def show_spectrogram(self, z, w, WindowSize, DeltaWindow, n, spec_len, spec_idx):
         """Display spectrogram in separate window with fullscreen capability"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
-        # Create dialog window
         spectrogram_window = QDialog(self)
         spectrogram_window.setWindowTitle("Spectrogram - Windowed Fourier Transform")
-
-        # Open in fullscreen immediately
         spectrogram_window.showMaximized()
 
         layout = QVBoxLayout(spectrogram_window)
 
-        # Create matplotlib figure
         fig = Figure(figsize=(16, 10), dpi=100)
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
@@ -2587,14 +2634,14 @@ class Step3FourierWindow(QMainWindow):
         img = ax.imshow(
             np.flip(np.flip(z).T),
             extent=[0, WindowSize / 60 + n * DeltaWindow / 3600,
-                   0, w[int(len(w) * 0.01 * part)]],
+                    0, w[spec_idx]],          # spec_idx = min(spec_len, len(w)-1)
             cmap='gist_heat',
             vmin=-10,
             aspect='auto'
         )
 
-        # Colorbar with custom label
-        colorbar = plt.colorbar(img, ax=ax, shrink=0.75)
+        # Colorbar — use fig.colorbar, not plt.colorbar, to avoid cross-figure warning
+        colorbar = fig.colorbar(img, ax=ax, shrink=0.75)
         colorbar.ax.set_ylabel('Spectral density, [m²/s]', size=16)
         colorbar.ax.tick_params(labelsize=14)
 
@@ -2632,8 +2679,12 @@ class Step3FourierWindow(QMainWindow):
 
         step2_viz = output_folder / "Step2_Visualization.csv"
         data_before = pd.read_csv(step2_viz, comment='#')
-        data_before['timestamp'] = pd.to_datetime(data_before['timestamp'])
-        data_transformed_viz['timestamp'] = pd.to_datetime(data_transformed_viz['timestamp'])
+        data_before['timestamp'] = pd.to_datetime(data_before['timestamp'], errors='coerce')
+        data_transformed_viz['timestamp'] = pd.to_datetime(data_transformed_viz['timestamp'], errors='coerce')
+
+        # Drop rows with invalid timestamps
+        data_before = data_before.dropna(subset=['timestamp'])
+        data_transformed_viz = data_transformed_viz.dropna(subset=['timestamp'])
 
         progress_bar.setValue(50)
         status.setText("Creating comparison plot...")
@@ -2845,7 +2896,7 @@ class Step4ProcessingWindow(QMainWindow):
             QApplication.processEvents()
 
             df = pd.read_csv(step3_viz, comment='#')
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
             progress_bar.setValue(70)
             status.setText("Creating plot...")
@@ -2965,7 +3016,7 @@ class Step4ProcessingWindow(QMainWindow):
             result = fsolve(equation, x0)[0]
             return max(0.01, result)  # Avoid division by zero
 
-        def calculate_spectrum_params(arr, sensor_freq=8):
+        def calculate_spectrum_params(arr, sensor_freq):
             """Calculate spectral parameters: Q, nu, eps_width, rho"""
             from scipy.fftpack import rfft, rfftfreq
             from scipy.signal.windows import hann
@@ -3072,7 +3123,7 @@ class Step4ProcessingWindow(QMainWindow):
             except:
                 return 0
 
-        def calculate_Tz(arr, sensor_freq=8):
+        def calculate_Tz(arr, sensor_freq):
             """Calculate mean zero-crossing period"""
             from PyAstronomy import pyaC
 
@@ -3118,14 +3169,14 @@ class Step4ProcessingWindow(QMainWindow):
             QApplication.processEvents()
 
             data = pd.read_csv(step2_file, comment='#')
-            data['timestamp'] = pd.to_datetime(data['timestamp'])
+            data['timestamp'] = pd.to_datetime(data['timestamp'], errors='coerce')
 
             # Load existing parameters
             existing_params = pd.read_csv(parameters_file, comment='#')
 
             # Load viz data for mapping
             viz_data = pd.read_csv(step2_viz, comment='#')
-            viz_data['timestamp'] = pd.to_datetime(viz_data['timestamp'])
+            viz_data['timestamp'] = pd.to_datetime(viz_data['timestamp'], errors='coerce')
 
             progress_bar.setValue(10)
             status.setText("Starting processing...")
@@ -3148,7 +3199,8 @@ class Step4ProcessingWindow(QMainWindow):
             batch_readings = []
             batch_has_removal = False
 
-            sensor_freq = 8  # Default
+            # Read sensor frequency from CSV header (Step3 inherits it from Step2)
+            sensor_freq = read_sensor_freq_from_csv(step2_file)
 
             # ==========================
             # MAIN PROCESSING LOOP - OPTIMIZED
@@ -3516,7 +3568,7 @@ def main():
                 if viz_cache_file.exists():
                     # Super fast path - just load pre-sampled data
                     df = pd.read_csv(viz_cache_file, comment='#')
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
                     # Read metadata
                     with open(viz_cache_file, 'r') as f:
@@ -3602,7 +3654,7 @@ def main():
                 status.setText("Converting timestamps...")
                 app.processEvents()
 
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
                 # Read metadata from original file
                 with open(csv_file, 'r') as f:
