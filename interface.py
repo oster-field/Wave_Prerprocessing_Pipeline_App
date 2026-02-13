@@ -1885,8 +1885,7 @@ class Step3FourierWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.spectrum_full    = None   # S(ω) — for plotting
-        self.rfft_full        = None   # raw complex rfft(y) — for irfft in apply_transform
+        self.spectrum_full    = None   # complex FFT — for apply_transform
         self.frequencies_full = None
         self.cutoff_freq      = None
         self.init_ui()
@@ -2054,7 +2053,8 @@ class Step3FourierWindow(QMainWindow):
 
             spectrum_df = pd.read_csv(step3_spectrum_viz, comment='#')
             self.frequencies_viz   = spectrum_df['frequency'].values
-            self.spectrum_viz_real = spectrum_df['spectral_density'].values
+            self.spectrum_viz_real = spectrum_df['real'].values
+            self.spectrum_viz_imag = spectrum_df['imag'].values
 
             progress_bar.setValue(60)
             status.setText("Loading full spectrum...")
@@ -2063,7 +2063,7 @@ class Step3FourierWindow(QMainWindow):
             # Load full spectrum
             spectrum_full_df = pd.read_csv(step3_spectrum, comment='#')
             self.frequencies_full = spectrum_full_df['frequency'].values
-            self.spectrum_full    = spectrum_full_df['spectral_density'].values
+            self.spectrum_full    = spectrum_full_df['real'].values + 1j * spectrum_full_df['imag'].values
 
             progress_bar.setValue(90)
             status.setText("Creating plot...")
@@ -2117,41 +2117,33 @@ class Step3FourierWindow(QMainWindow):
             status.setText(f"Computing FFT for {len(y):,} points (sensor freq: {sensor_freq} Hz)...")
             QApplication.processEvents()
 
-            # Perform rfft (one-sided, as in Article_Spectras.py)
-            from scipy.fftpack import rfft, rfftfreq
+            # Perform full FFT (two-sided, original approach)
+            from scipy.fftpack import fft, fftfreq
 
-            N_signal = len(y)
-            s_raw    = np.abs(rfft(y))
-            x = rfftfreq(N_signal, (1 / sensor_freq) / (2 * np.pi))
-
-            # Store raw complex rfft for irfft in apply_transform
-            from scipy.fftpack import rfft as rfft_complex
-            self.rfft_full = rfft_complex(y)   # complex, shape (N,)
-
-            # S(ω) = |rfft|² / (N · max(ω))   — exactly as in Article_Spectras.py
-            s = (s_raw ** 2) / (N_signal * np.max(x))
+            s = fft(y)
+            x = fftfreq(len(y), (1 / sensor_freq) / (2 * np.pi))  # Angular frequency ω [rad/s]
 
             progress_bar.setValue(60)
             status.setText("Saving full spectrum...")
             QApplication.processEvents()
 
-            # Save full spectrum — s is now real-valued S(ω)
+            # Save full spectrum (real + imag kept for irfft in apply_transform)
             spectrum_df = pd.DataFrame({
                 'frequency': x,
-                'spectral_density': s
+                'real': s.real,
+                'imag': s.imag
             })
 
             with open(step3_spectrum, 'w', encoding='utf-8') as f:
-                f.write("# STEP 3: Full Fourier Spectrum — S(ω) = |rfft|²/(N·max(ω))\n")
+                f.write("# STEP 3: Full Fourier Spectrum\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Total points: {len(x)}\n")
                 f.write(f"# Sensor frequency: {sensor_freq} Hz\n")
-                f.write(f"# N_signal: {N_signal}\n")
                 f.write("# ==========================================\n")
 
             spectrum_df.to_csv(step3_spectrum, mode='a', index=False)
 
-            self.spectrum_full    = s   # S(ω), real array
+            self.spectrum_full    = s   # complex FFT — used by apply_transform
             self.frequencies_full = x
 
             progress_bar.setValue(75)
@@ -2168,7 +2160,8 @@ class Step3FourierWindow(QMainWindow):
             # Save visualization
             viz_df = pd.DataFrame({
                 'frequency': x_viz,
-                'spectral_density': s_viz
+                'real': s_viz.real,
+                'imag': s_viz.imag
             })
 
             progress_bar.setValue(85)
@@ -2184,8 +2177,9 @@ class Step3FourierWindow(QMainWindow):
 
             viz_df.to_csv(step3_spectrum_viz, mode='a', index=False)
 
-            self.frequencies_viz    = x_viz
-            self.spectrum_viz_real  = s_viz   # S(ω), real
+            self.frequencies_viz   = x_viz
+            self.spectrum_viz_real = s_viz.real
+            self.spectrum_viz_imag = s_viz.imag
 
             progress_bar.setValue(95)
             status.setText("Preparing plot...")
@@ -2208,63 +2202,60 @@ class Step3FourierWindow(QMainWindow):
             )
 
     def create_spectrum_plot(self):
-        """Create two separate independent spectrum plots with S(ω) spectral density"""
+        """Create two separate independent spectrum plots"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
-
-        # ==============================================================================
-        # DATA — spectrum_full and spectrum_viz_real are already S(ω) [m²/s]
-        # computed as: S(ω) = |rfft|² / (N_signal · max(ω))
-        # rfft gives only positive frequencies, so no filtering needed
-        # ==============================================================================
         from matplotlib import ticker as mticker
 
-        # Top graph: subsampled S(ω) — all frequencies up to Nyquist
-        freq_viz = self.frequencies_viz          # all positive, rfft output
-        s_viz    = self.spectrum_viz_real
+        # ── S(ω) = |FFT|² / (N · max(ω))  [m²/s]  ──────────────────────────
+        N = len(self.spectrum_full)
+        omega_max = np.max(np.abs(self.frequencies_full))
 
-        # Bottom graph: full-resolution S(ω), low-frequency zoom 0 < ω ≤ 0.1
-        freq_full = self.frequencies_full
-        s_full    = self.spectrum_full
+        # Top graph: subsampled, ω > 0.05 (exclude DC and large low-freq harmonics)
+        pos_viz = self.frequencies_viz > 0.05
+        freq_viz = self.frequencies_viz[pos_viz]
+        mag_viz  = np.sqrt(self.spectrum_viz_real[pos_viz]**2 + self.spectrum_viz_imag[pos_viz]**2)
+        s_viz    = (mag_viz**2) / (N * omega_max)
+
+        # Bottom graph: full resolution, positive, 0 < ω ≤ 0.1
+        pos_full = self.frequencies_full >= 0
+        freq_full = self.frequencies_full[pos_full]
+        mag_full  = np.sqrt(self.spectrum_full.real[pos_full]**2 + self.spectrum_full.imag[pos_full]**2)
+        s_full    = (mag_full**2) / (N * omega_max)
         zoom_idx  = (freq_full > 0) & (freq_full <= 0.1)
         freq_zoom = freq_full[zoom_idx]
         s_zoom    = s_full[zoom_idx]
 
         # ==============================================================================
-        # TOP GRAPH — S(ω) overview, xlim [0, 2] exactly as in Article_Spectras.py
+        # TOP GRAPH: overview, ω ∈ [0, 3]
         # ==============================================================================
         fig_top = Figure(figsize=(16, 4), dpi=100)
         canvas_top = FigureCanvas(fig_top)
         ax_top = fig_top.add_subplot(111)
 
-        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color='#007241', alpha=0.95)
-        ax_top.set_xlabel('ω, [rad/s]', fontsize=13)
-        ax_top.set_ylabel('S(ω), [m²/s]', fontsize=13)
-        ax_top.tick_params(labelsize=11)
-        ax_top.set_xlim(0, 2.0)
+        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color='green', alpha=0.9)
+        ax_top.set_xlabel('ω, [rad/s]', fontsize=11)
+        ax_top.set_ylabel('S(ω), [m²/s]', fontsize=11)
+        ax_top.grid(True, alpha=0.3)
+        ax_top.set_xlim(0, 3.0)
         ax_top.set_ylim(0, None)
-        ax_top.grid(axis='y', alpha=0.4)          # grid only on Y — как в статье
-        ax_top.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:.4f}"))
 
         fig_top.tight_layout()
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
 
         # ==============================================================================
-        # BOTTOM GRAPH — S(ω) low-frequency zoom (0 < ω ≤ 0.1), log Y scale,
-        # interactive click to set cutoff
+        # BOTTOM GRAPH: 0 < ω ≤ 0.1, log Y, interactive cutoff
         # ==============================================================================
         fig_bottom = Figure(figsize=(16, 5), dpi=100)
         canvas_bottom = FigureCanvas(fig_bottom)
         ax_bottom = fig_bottom.add_subplot(111)
 
-        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color='#007241', alpha=0.95)
-        ax_bottom.set_xlabel('ω, [rad/s]', fontsize=13)
-        ax_bottom.set_ylabel('S(ω), [m²/s]', fontsize=13)
-        ax_bottom.tick_params(labelsize=11)
+        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color='green', alpha=0.9)
+        ax_bottom.set_xlabel('ω, [rad/s]', fontsize=11)
+        ax_bottom.set_ylabel('S(ω), [m²/s]', fontsize=11)
         ax_bottom.set_xlim(0, 0.1)
-        ax_bottom.set_ylim(bottom=None)
+        ax_bottom.grid(True, alpha=0.3, which='both')
+        # Log scale — set AFTER plot so matplotlib auto-sets ylim from data (no warning)
         ax_bottom.set_yscale('log')
-        ax_bottom.grid(axis='y', alpha=0.4, which='both')
-        ax_bottom.yaxis.set_major_formatter(mticker.StrMethodFormatter("{x:.2e}"))
 
         fig_bottom.tight_layout()
         toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
@@ -2385,36 +2376,26 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            # Apply cutoff filter on the raw complex rfft
+            # Apply cutoff filter on the complex FFT spectrum
             progress_bar.setValue(20)
             status.setText("Applying frequency filter...")
             QApplication.processEvents()
 
-            # If rfft_full is not in memory (loaded from cache), recompute from Step2
-            if self.rfft_full is None:
-                from scipy.fftpack import rfft as rfft_complex, rfftfreq
-                step2_file_tmp = output_folder / "Step2_Zero_Mean.csv"
-                y_tmp = pd.read_csv(step2_file_tmp, comment='#')['pressure'].values
-                sensor_freq_tmp = read_sensor_freq_from_csv(step2_file_tmp)
-                self.rfft_full = rfft_complex(y_tmp)
-                self.frequencies_full = rfftfreq(len(y_tmp),
-                                                  (1 / sensor_freq_tmp) / (2 * np.pi))
+            s_filtered = self.spectrum_full.copy()
 
-            s_filtered = self.rfft_full.copy()
-
-            # Zero out frequencies below cutoff (rfft frequencies are all positive)
+            # Remove frequencies below cutoff
             for i in range(len(self.frequencies_full)):
-                if self.frequencies_full[i] < self.cutoff_freq:
-                    s_filtered[i] = 0.0
+                if abs(self.frequencies_full[i]) < self.cutoff_freq:
+                    s_filtered[i] = 0 + 0j
 
             progress_bar.setValue(40)
             status.setText("Computing inverse FFT...")
             QApplication.processEvents()
 
-            # Inverse rfft
-            from scipy.fftpack import irfft
+            # Inverse FFT
+            from scipy.fftpack import ifft
 
-            y_transformed = irfft(s_filtered)
+            y_transformed = ifft(s_filtered).real
 
             progress_bar.setValue(60)
             status.setText("Saving transformed data...")
@@ -2470,12 +2451,14 @@ class Step3FourierWindow(QMainWindow):
             data_viz = data_transformed.iloc[::step].copy()
 
             step3_viz_file = output_folder / "Step3_Visualization.csv"
+            _viz_sensor_freq = read_sensor_freq_from_csv(output_folder / "Step2_Zero_Mean.csv")
 
             with open(step3_viz_file, 'w', encoding='utf-8') as f:
                 f.write("# STEP 3: Visualization - Transformed data (subsampled)\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Sampled points: {len(data_viz)}\n")
                 f.write(f"# Original points: {len(data_transformed)}\n")
+                f.write(f"# Sensor frequency: {_viz_sensor_freq} Hz\n")
                 f.write("# ==========================================\n")
 
             data_viz.to_csv(step3_viz_file, mode='a', index=False)
@@ -2821,7 +2804,6 @@ class Step4ProcessingWindow(QMainWindow):
         self.cb_remove_low_rms = QCheckBox("Remove recordings with RMS <")
         rms_layout.addWidget(self.cb_remove_low_rms)
 
-        # RMS input field - normal decimal input
         self.rms_input = QLineEdit("0.015")
         self.rms_input.setMaxLength(10)
         self.rms_input.setFixedWidth(80)
@@ -2831,6 +2813,65 @@ class Step4ProcessingWindow(QMainWindow):
         rms_layout.addWidget(QLabel("meters"))
         rms_layout.addStretch()
         controls_layout.addLayout(rms_layout)
+
+        # Checkbox 3: Spline interpolation (UI only, not functional yet)
+        spline_layout = QHBoxLayout()
+        self.cb_spline = QCheckBox("Spline interpolation  from")
+        spline_layout.addWidget(self.cb_spline)
+
+        # Current frequency label — will be updated after data loads
+        self.lbl_freq_from = QLabel("? Hz")
+        self.lbl_freq_from.setStyleSheet("font-weight: bold; color: #2c3e50;")
+        spline_layout.addWidget(self.lbl_freq_from)
+
+        spline_layout.addWidget(QLabel("→"))
+
+        self.spline_freq_input = QSpinBox()
+        self.spline_freq_input.setRange(1, 1000)
+        self.spline_freq_input.setValue(8)
+        self.spline_freq_input.setSuffix(" Hz")
+        self.spline_freq_input.setFixedWidth(90)
+        self.spline_freq_input.setStyleSheet("""
+            QSpinBox {
+                font-size: 13px; padding: 2px 4px;
+                border: 1.5px solid #b0bec5; border-radius: 4px;
+            }
+        """)
+        spline_layout.addWidget(self.spline_freq_input)
+        spline_layout.addStretch()
+        controls_layout.addLayout(spline_layout)
+
+        # ── Legend ──────────────────────────────────────────────────────────
+        controls_layout.addSpacing(8)
+        legend_layout = QHBoxLayout()
+        legend_layout.setSpacing(18)
+
+        def _legend_item(color, label_text, style='fill'):
+            """Helper: colored square/circle icon + label."""
+            row = QHBoxLayout()
+            row.setSpacing(5)
+            icon = QLabel()
+            icon.setFixedSize(18, 18)
+            if style == 'fill':
+                icon.setStyleSheet(
+                    f"background-color: {color}; border-radius: 3px; opacity: 0.6;"
+                )
+            else:  # dashed circle
+                icon.setStyleSheet(
+                    f"border: 2px dashed {color}; border-radius: 9px; background: transparent;"
+                )
+            row.addWidget(icon)
+            row.addWidget(QLabel(label_text))
+            return row
+
+        for row in [
+            _legend_item("#27ae60", "Processed recording", 'fill'),
+            _legend_item("#e74c3c", "Removed recording",   'fill'),
+            _legend_item("#e74c3c", "Spike",               'circle'),
+        ]:
+            legend_layout.addLayout(row)
+        legend_layout.addStretch()
+        controls_layout.addLayout(legend_layout)
 
         controls_group.setLayout(controls_layout)
         layout.addWidget(controls_group)
@@ -2894,6 +2935,12 @@ class Step4ProcessingWindow(QMainWindow):
             progress_bar.setValue(30)
             status.setText("Reading Step3_Visualization.csv...")
             QApplication.processEvents()
+
+            # Read sensor frequency from this file's header
+            viz_sensor_freq = read_sensor_freq_from_csv(step3_viz)
+            self.lbl_freq_from.setText(f"{viz_sensor_freq} Hz")
+            self.spline_freq_input.setMinimum(viz_sensor_freq)
+            self.spline_freq_input.setValue(max(viz_sensor_freq, self.spline_freq_input.value()))
 
             df = pd.read_csv(step3_viz, comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
@@ -3395,12 +3442,14 @@ class Step4ProcessingWindow(QMainWindow):
 
                 spike_x = mdates.date2num(spike_time)
 
-                circle = plt.Circle((spike_x, spike_value),
-                                   radius=0.1,
-                                   color='black',
-                                   fill=True,
-                                   zorder=15)
-                self.ax.add_patch(circle)
+                # Dashed unfilled circle marker — always round regardless of axis scale
+                self.ax.plot(spike_x, spike_value, 'o',
+                             markersize=9,
+                             markerfacecolor='none',
+                             markeredgecolor='red',
+                             markeredgewidth=1.2,
+                             linestyle='none',
+                             zorder=15)
 
             self.canvas.draw()
             QApplication.processEvents()
