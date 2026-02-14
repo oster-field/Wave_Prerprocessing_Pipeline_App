@@ -1062,24 +1062,33 @@ class VisualizationWindow(QMainWindow):
 
     def detect_dives(self, pressure, sensitivity=3.0):
         """
-        NEW dive detector based on gradient analysis
+        Dive detector based on gradient analysis.
 
-        Logic:
-        - Beginning leg: Low values + VERTICAL JUMP (large positive gradient)
-        - Ending leg: VERTICAL DROP (large negative gradient) + low values
+        Key rules:
+        1. GUARD: if first point >= 2.0  → no beginning leg.
+                  if last  point >= 2.0  → no ending leg.
+           (Deployment always starts in air/shallow <2, retrieval ends there.)
 
-        The "leg" includes:
-        1. Pre-jump noise near zero
-        2. The vertical jump/drop itself
-        3. Stops when stable wave oscillations begin
-        4. +10% safety margin to ensure complete coverage
+        2. BEGINNING LEG — search in first 40% of data:
+           Find ALL positive gradient spikes where:
+             - gradient > sensitivity * grad_std  (significant spike)
+             - pressure BEFORE spike < 2.0        (coming from air/shallow)
+             - pressure AFTER  spike >= 2.0       (arrived at depth)
+           These are true water-entry events. The leg ends after the
+           LAST such spike (sensor may re-surface several times before
+           settling at deployment depth).
+           Mark [0 : last_jump_settled] as dive leg.
 
-        Args:
-            pressure: array of pressure values
-            sensitivity: threshold multiplier for gradient detection
+        3. ENDING LEG — search in last 40% of data:
+           Find ALL negative gradient spikes where:
+             - gradient < -sensitivity * grad_std (significant drop)
+             - pressure BEFORE spike >= 2.0       (was at depth)
+             - pressure AFTER  spike < 2.0        (left the water)
+           The leg starts at the FIRST such spike.
+           Mark [first_drop_start : n] as dive leg.
 
         Returns:
-            Boolean mask where True = dive section
+            Boolean mask where True = dive/retrieval section to remove.
         """
         n = len(pressure)
         dive_mask = np.zeros(n, dtype=bool)
@@ -1087,71 +1096,68 @@ class VisualizationWindow(QMainWindow):
         if n < 100:
             return dive_mask
 
-        # Calculate gradient (rate of change)
-        gradient = np.gradient(pressure)
+        gradient     = np.gradient(pressure)
         gradient_abs = np.abs(gradient)
+        grad_std     = np.std(gradient)
+        threshold    = sensitivity * grad_std
 
-        # Statistics
-        grad_std = np.std(gradient)
+        # ── BEGINNING LEG ──────────────────────────────────────────────────
+        if pressure[0] < 2.0:
+            search_end = min(int(n * 0.4), 4000)
 
-        # === BEGINNING LEG ===
-        # Look in first 30% of data
-        search_end = min(n // 3, 2000)
+            # True dive entry: large positive gradient AND crosses the 2.0 boundary
+            jump_indices = []
+            for i in range(1, search_end):
+                if gradient[i] > threshold:
+                    p_before = pressure[i - 1]
+                    p_after  = pressure[min(i + 1, n - 1)]
+                    # Must be a genuine air→water crossing
+                    if p_before < 2.0 and p_after >= 2.0:
+                        jump_indices.append(i)
 
-        # Find the largest positive jump in beginning
-        beginning_grad = gradient[:search_end]
-        max_jump_idx = beginning_grad.argmax()
-        max_jump_value = beginning_grad[max_jump_idx]
+            if jump_indices:
+                # Use the LAST genuine entry — leg ends after all re-entries
+                last_jump = jump_indices[-1]
 
-        # If there's a significant jump (> sensitivity * std)
-        if max_jump_value > sensitivity * grad_std:
-            # Beginning leg goes from start to end of jump
-            # Find where the jump transition completes
-            jump_end = max_jump_idx
+                # Walk forward from last spike until gradient calms
+                leg_end = last_jump
+                for i in range(last_jump + 1, min(last_jump + 200, search_end)):
+                    if gradient_abs[i] < grad_std:
+                        leg_end = i
+                        break
 
-            # Extend a bit past the jump to include transition
-            for i in range(max_jump_idx + 1, min(max_jump_idx + 100, search_end)):
-                # Stop when gradient becomes small (stable oscillations)
-                if gradient_abs[i] < grad_std:
-                    jump_end = i
-                    break
+                # 10 % safety margin
+                leg_end = min(leg_end + max(1, leg_end // 10), n - 1)
+                dive_mask[0:leg_end] = True
 
-            # Add 10% safety margin
-            leg_length = jump_end
-            safety_margin = int(leg_length * 0.1)
-            jump_end = min(jump_end + safety_margin, n - 1)
+        # ── ENDING LEG ─────────────────────────────────────────────────────
+        if pressure[-1] < 2.0:
+            search_start = max(int(n * 0.6), n - 4000)
 
-            # Mark from start to end of jump
-            dive_mask[0:jump_end] = True
+            # True retrieval exit: large negative gradient AND crosses 2.0 boundary
+            drop_indices = []
+            for i in range(search_start + 1, n):
+                if gradient[i] < -threshold:
+                    p_before = pressure[i - 1]
+                    p_after  = pressure[min(i + 1, n - 1)]
+                    # Must be a genuine water→air crossing
+                    if p_before >= 2.0 and p_after < 2.0:
+                        drop_indices.append(i)
 
-        # === ENDING LEG ===
-        # Look in last 30% of data
-        search_start = max(2 * n // 3, n - 2000)
+            if drop_indices:
+                # Use the FIRST genuine exit — leg starts at first surface crossing
+                first_drop = drop_indices[0]
 
-        # Find where pressure starts dropping significantly
-        ending_section = pressure[search_start:]
-        ending_grad = gradient[search_start:]
+                # Walk backward until gradient calms
+                leg_start = first_drop
+                for i in range(first_drop - 1, max(first_drop - 200, search_start), -1):
+                    if gradient_abs[i] < grad_std:
+                        leg_start = i
+                        break
 
-        # Find the point where pressure drops below wave level and stays low
-        wave_mean = np.mean(pressure[n//3:2*n//3])  # Middle section = waves
-        low_threshold = wave_mean * 0.3  # Much lower than waves
-
-        # Find where it drops below threshold
-        drop_start = None
-        for i in range(len(ending_section) - 50):
-            # Check if next 50 points are all below threshold
-            if np.all(ending_section[i:i+50] < low_threshold):
-                drop_start = search_start + i
-                break
-
-        if drop_start is not None:
-            # Add 10% safety margin (go back earlier)
-            leg_length = n - drop_start
-            safety_margin = int(leg_length * 0.1)
-            drop_start = max(drop_start - safety_margin, 0)
-
-            # Mark from drop start to end
-            dive_mask[drop_start:] = True
+                # 10 % safety margin (go a bit earlier)
+                leg_start = max(leg_start - max(1, (n - leg_start) // 10), 0)
+                dive_mask[leg_start:] = True
 
         return dive_mask
 
@@ -1267,6 +1273,7 @@ class VisualizationWindow(QMainWindow):
         with open(zero_mean_file, 'w', encoding='utf-8') as f:
             f.write("# STEP 2: Zero Mean - Global average subtracted\n")
             f.write("# ==========================================\n")
+            f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
             f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
             f.write(f"# All pressure values have this subtracted\n")
             f.write("# ==========================================\n")
@@ -1819,6 +1826,7 @@ class ManualRemovalWindow(QMainWindow):
         with open(zero_mean_file, 'w', encoding='utf-8') as f:
             f.write("# STEP 2: Zero Mean - Global average subtracted\n")
             f.write("# ==========================================\n")
+            f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
             f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
             f.write(f"# All pressure values have this subtracted\n")
             f.write("# ==========================================\n")
@@ -3036,8 +3044,10 @@ class Step4ProcessingWindow(QMainWindow):
         parameters_file = output_folder / "Parameters.csv"
 
         # Get options
-        remove_spikes = self.cb_remove_spikes.isChecked()
-        remove_low_rms = self.cb_remove_low_rms.isChecked()
+        remove_spikes    = self.cb_remove_spikes.isChecked()
+        remove_low_rms   = self.cb_remove_low_rms.isChecked()
+        use_spline       = self.cb_spline.isChecked()
+        spline_target_hz = self.spline_freq_input.value()  # target Hz from spinbox
 
         # Parse RMS threshold
         rms_threshold = 0.015
@@ -3349,8 +3359,23 @@ class Step4ProcessingWindow(QMainWindow):
 
                 # ========== STEP 3: CALCULATE ALL WAVE PARAMETERS ==========
 
-                variance = np.var(arr)
-                sigma = np.sqrt(variance)
+                # --- Spline interpolation for amplitude metrics (As, Hs) ---
+                # If enabled: resample arr to spline_target_hz via cubic spline.
+                # All spectral/integral parameters (Q, nu, eps, Tz…) still use
+                # the original arr at sensor_freq.
+                if use_spline and spline_target_hz > sensor_freq:
+                    from scipy.interpolate import CubicSpline
+                    n_orig   = len(arr)
+                    t_orig   = np.arange(n_orig) / sensor_freq          # seconds
+                    cs       = CubicSpline(t_orig, arr)
+                    # New time grid at target frequency
+                    t_new    = np.arange(0, t_orig[-1], 1.0 / spline_target_hz)
+                    arr_amp  = cs(t_new)                                # interpolated
+                else:
+                    arr_amp = arr                                        # same as original
+
+                variance = np.var(arr)          # from ORIGINAL — for spectral params
+                sigma    = np.sqrt(np.var(arr_amp))   # from interpolated — for amplitudes
                 As = 2 * sigma
                 Hs = 4 * sigma
 
