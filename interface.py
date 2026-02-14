@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
                              QListWidget, QGroupBox, QMessageBox, QDialog,
                              QProgressBar, QTextEdit, QCheckBox, QLineEdit,
-                             QSpinBox)
+                             QSpinBox, QRadioButton, QAction)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent
 from pathlib import Path
@@ -37,8 +37,9 @@ SPECTRUM_TARGET_POINTS = 100000
 # ==============================================================================
 
 
-def read_sensor_freq_from_csv(csv_path, default=8):
-    """Read sensor frequency from CSV comment header. Returns int Hz."""
+def read_sensor_freq_from_csv(csv_path, default=None):
+    """Read sensor frequency from CSV comment header. Returns int Hz.
+    Raises ValueError if not found and no default provided."""
     try:
         with open(csv_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
@@ -49,7 +50,12 @@ def read_sensor_freq_from_csv(csv_path, default=8):
                     return int(m.group(1))
     except Exception:
         pass
-    return default
+    if default is not None:
+        return default
+    raise ValueError(
+        f"Could not find \'Sensor frequency: N Hz\' in header of:\n{csv_path}\n"
+        "Re-run the pipeline from Step 1 to regenerate the file."
+    )
 
 
 def _lbl(text, style=""):
@@ -183,21 +189,25 @@ class ProcessingThread(QThread):
 
     def read_info_file(self):
         """Read metadata from INFO file using regex - flexible parsing"""
+        # Try every encoding until we find the frequency — never fall back to default
+        sensor_frequency = None
         content = None
-        for encoding in ['windows-1251', 'cp1251', 'utf-8', 'latin-1']:
+        for encoding in ['utf-8', 'windows-1251', 'cp1251', 'latin-1']:
             try:
                 with open(self.info_file, 'r', encoding=encoding, errors='ignore') as f:
                     content = f.read()
-                break
+                freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
+                          or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
+                if freq_match:
+                    sensor_frequency = int(freq_match.group(1))
+                    break  # Found — stop trying encodings
             except Exception:
                 continue
-        if content is None:
-            raise ValueError("Could not read INFO file with any encoding")
-
-        # Sensor frequency
-        freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
-                  or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
-        sensor_frequency = int(freq_match.group(1)) if freq_match else 8
+        if sensor_frequency is None:
+            raise ValueError(
+                "Could not find sensor frequency in INFO file.\n"
+                "Expected a line like: 'Частота опроса: 8 Гц' or 'Frequency: 8 Hz'"
+            )
 
         # Datetimes: "2022.10.18 11:47:48.000"
         dt_pattern = re.compile(r'(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)')
@@ -644,21 +654,25 @@ class MainWindow(QMainWindow):
 
     def _parse_info_file(self, file_path):
         """Parse INFO file with regex - handles any encoding, flexible format"""
+        # Try every encoding until we find the frequency — never fall back to default
+        sensor_frequency = None
         content = None
-        for encoding in ['windows-1251', 'cp1251', 'utf-8', 'latin-1']:
+        for encoding in ['utf-8', 'windows-1251', 'cp1251', 'latin-1']:
             try:
                 with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
                     content = f.read()
-                break
+                freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
+                          or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
+                if freq_match:
+                    sensor_frequency = int(freq_match.group(1))
+                    break  # Found — stop trying encodings
             except Exception:
                 continue
-        if content is None:
-            raise ValueError("Cannot read file")
-
-        # Sensor frequency
-        freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
-                  or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
-        sensor_frequency = int(freq_match.group(1)) if freq_match else 8
+        if sensor_frequency is None:
+            raise ValueError(
+                "Could not find sensor frequency in INFO file.\n"
+                "Expected a line like: 'Частота опроса: 8 Гц' or 'Frequency: 8 Hz'"
+            )
 
         # Datetimes: "2022.10.18 11:47:48.000"
         dt_pattern = re.compile(r'(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)')
@@ -934,6 +948,9 @@ class VisualizationWindow(QMainWindow):
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         self.canvas = self.create_plot()
         toolbar = NavigationToolbar2QT(self.canvas, self)
+        full_data_action = QAction('📊 Build all data points (slow)', self)
+        full_data_action.triggered.connect(self.build_full_data_step1)
+        toolbar.addAction(full_data_action)
         layout.addWidget(toolbar)
         layout.addWidget(self.canvas)
 
@@ -1164,9 +1181,10 @@ class VisualizationWindow(QMainWindow):
 
     def on_manual_removal(self):
         """Handle manual removal button click"""
-        # Close current window and open manual removal window
-        self.manual_window = ManualRemovalWindow(self.data_df)
-        self.manual_window.show()
+        # Store on app instance to survive self destruction
+        _w = ManualRemovalWindow(self.data_df)
+        QApplication.instance()._manual_window = _w
+        _w.show()
         self.close()
 
     def on_skip_removal(self):
@@ -1218,9 +1236,10 @@ class VisualizationWindow(QMainWindow):
 
             progress_dialog.close()
 
-            # Open Step 3 window
-            self.step3_window = Step3FourierWindow()
-            self.step3_window.show()
+            # Open Step 3 window — store on app to survive self destruction
+            _w = Step3FourierWindow()
+            QApplication.instance()._step3_window = _w
+            _w.show()
             self.close()
 
         except Exception as e:
@@ -1312,6 +1331,23 @@ class VisualizationWindow(QMainWindow):
             f.write("# ==========================================\n")
 
         reading_averages.to_csv(parameters_file, mode='a', index=False)
+
+    def build_full_data_step1(self):
+        """Load and plot full Step1 data in new window"""
+        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True); progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step1_TXTtoCSV.csv...'))
+        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
+        progress.show(); QApplication.processEvents()
+        try:
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            df = pd.read_csv(script_dir / 'Output' / 'Step1_TXTtoCSV.csv', comment='#')
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            progress.close()
+            _w = FullDataWindow(df, 'Step 1: Full Raw Data')
+            QApplication.instance()._full_window = _w; _w.show()
+        except Exception as e:
+            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
     def apply_styles(self):
         """Apply global styles"""
@@ -1469,51 +1505,76 @@ class ManualRemovalWindow(QMainWindow):
                 self.ending_data = self.viz_data_df.iloc[start:end+1].copy()
 
     def detect_dives(self, pressure, sensitivity=3.0):
-        """Same dive detection as VisualizationWindow"""
+        """
+        Dive detector — identical to VisualizationWindow.detect_dives.
+
+        BEGINNING LEG: search first 40%, find ALL positive gradient spikes
+        crossing the 2.0 m boundary (air→water). Mark [0:last_jump_settled].
+
+        ENDING LEG: search last 40%, find ALL negative gradient spikes
+        crossing 2.0 m boundary (water→air). Mark [first_drop_start:n].
+
+        Guards: if pressure[0] >= 2.0 → no beginning leg;
+                if pressure[-1] >= 2.0 → no ending leg.
+        """
         n = len(pressure)
         dive_mask = np.zeros(n, dtype=bool)
 
         if n < 100:
             return dive_mask
 
-        gradient = np.gradient(pressure)
+        gradient     = np.gradient(pressure)
         gradient_abs = np.abs(gradient)
-        grad_std = np.std(gradient)
+        grad_std     = np.std(gradient)
+        threshold    = sensitivity * grad_std
 
-        # Beginning leg
-        search_end = min(n // 3, 2000)
-        beginning_grad = gradient[:search_end]
-        max_jump_idx = beginning_grad.argmax()
-        max_jump_value = beginning_grad[max_jump_idx]
+        # ── BEGINNING LEG ──────────────────────────────────────────────────
+        if pressure[0] < 2.0:
+            search_end = min(int(n * 0.4), 4000)
 
-        if max_jump_value > sensitivity * grad_std:
-            jump_end = max_jump_idx
-            for i in range(max_jump_idx + 1, min(max_jump_idx + 100, search_end)):
-                if gradient_abs[i] < grad_std:
-                    jump_end = i
-                    break
-            leg_length = jump_end
-            safety_margin = int(leg_length * 0.1)
-            jump_end = min(jump_end + safety_margin, n - 1)
-            dive_mask[0:jump_end] = True
+            jump_indices = []
+            for i in range(1, search_end):
+                if gradient[i] > threshold:
+                    p_before = pressure[i - 1]
+                    p_after  = pressure[min(i + 1, n - 1)]
+                    if p_before < 2.0 and p_after >= 2.0:
+                        jump_indices.append(i)
 
-        # Ending leg
-        search_start = max(2 * n // 3, n - 2000)
-        wave_mean = np.mean(pressure[n//3:2*n//3])
-        low_threshold = wave_mean * 0.3
+            if jump_indices:
+                last_jump = jump_indices[-1]
 
-        ending_section = pressure[search_start:]
-        drop_start = None
-        for i in range(len(ending_section) - 50):
-            if np.all(ending_section[i:i+50] < low_threshold):
-                drop_start = search_start + i
-                break
+                leg_end = last_jump
+                for i in range(last_jump + 1, min(last_jump + 200, search_end)):
+                    if gradient_abs[i] < grad_std:
+                        leg_end = i
+                        break
 
-        if drop_start is not None:
-            leg_length = n - drop_start
-            safety_margin = int(leg_length * 0.1)
-            drop_start = max(drop_start - safety_margin, 0)
-            dive_mask[drop_start:] = True
+                leg_end = min(leg_end + max(1, leg_end // 10), n - 1)
+                dive_mask[0:leg_end] = True
+
+        # ── ENDING LEG ─────────────────────────────────────────────────────
+        if pressure[-1] < 2.0:
+            search_start = max(int(n * 0.6), n - 4000)
+
+            drop_indices = []
+            for i in range(search_start + 1, n):
+                if gradient[i] < -threshold:
+                    p_before = pressure[i - 1]
+                    p_after  = pressure[min(i + 1, n - 1)]
+                    if p_before >= 2.0 and p_after < 2.0:
+                        drop_indices.append(i)
+
+            if drop_indices:
+                first_drop = drop_indices[0]
+
+                leg_start = first_drop
+                for i in range(first_drop - 1, max(first_drop - 200, search_start), -1):
+                    if gradient_abs[i] < grad_std:
+                        leg_start = i
+                        break
+
+                leg_start = max(leg_start - max(1, (n - leg_start) // 10), 0)
+                dive_mask[leg_start:] = True
 
         return dive_mask
 
@@ -1641,6 +1702,9 @@ class ManualRemovalWindow(QMainWindow):
 
         # Add navigation toolbar for zoom/pan
         toolbar = NavigationToolbar2QT(canvas, self)
+        full_data_action = QAction('📊 Build all data points (slow)', self)
+        full_data_action.triggered.connect(self.build_full_data_step2)
+        toolbar.addAction(full_data_action)
 
         # Container widget
         container = QWidget()
@@ -1748,6 +1812,7 @@ class ManualRemovalWindow(QMainWindow):
             with open(step2_file, 'w', encoding='utf-8') as f:
                 f.write("# STEP 2: Initial Cut - Manual dive removal\n")
                 f.write("# ==========================================\n")
+                f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(csv_file)} Hz\n")
                 f.write(f"# Original points: {len(full_data):,}\n")
                 f.write(f"# Trimmed points: {len(trimmed_data):,}\n")
                 f.write(f"# Points removed: {len(full_data) - len(trimmed_data):,}\n")
@@ -1768,9 +1833,10 @@ class ManualRemovalWindow(QMainWindow):
 
             progress_dialog.close()
 
-            # Open Step 3 window
-            self.step3_window = Step3FourierWindow()
-            self.step3_window.show()
+            # Open Step 3 window — store on app to survive self destruction
+            _w = Step3FourierWindow()
+            QApplication.instance()._step3_window = _w
+            _w.show()
             self.close()
 
         except Exception as e:
@@ -1865,6 +1931,23 @@ class ManualRemovalWindow(QMainWindow):
             f.write("# ==========================================\n")
 
         reading_averages.to_csv(parameters_file, mode='a', index=False)
+
+    def build_full_data_step2(self):
+        """Load and plot full Step2 data in new window"""
+        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True); progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step2_Initial_Cut.csv...'))
+        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
+        progress.show(); QApplication.processEvents()
+        try:
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            df = pd.read_csv(script_dir / 'Output' / 'Step2_Initial_Cut.csv', comment='#')
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            progress.close()
+            _w = FullDataWindow(df, 'Step 2: Full Initial Cut Data')
+            QApplication.instance()._full_window = _w; _w.show()
+        except Exception as e:
+            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
     def apply_styles(self):
         """Apply global styles"""
@@ -2032,10 +2115,13 @@ class Step3FourierWindow(QMainWindow):
         # Check if spectrum already exists
         if step3_spectrum_viz.exists():
             # Show progress for loading cache
-            progress_dialog = QDialog(self)
+            progress_dialog = QDialog(None)
             progress_dialog.setWindowTitle("Loading Cached Spectrum")
             progress_dialog.setModal(True)
             progress_dialog.setFixedSize(500, 150)
+            progress_dialog.setWindowFlags(
+                progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
+            )
 
             layout = QVBoxLayout(progress_dialog)
 
@@ -2086,10 +2172,13 @@ class Step3FourierWindow(QMainWindow):
             return
 
         # Show progress dialog
-        progress_dialog = QDialog(self)
+        progress_dialog = QDialog(None)
         progress_dialog.setWindowTitle("Computing Fourier Transform")
         progress_dialog.setModal(True)
         progress_dialog.setFixedSize(500, 150)
+        progress_dialog.setWindowFlags(
+            progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
+        )
 
         layout = QVBoxLayout(progress_dialog)
 
@@ -2249,6 +2338,9 @@ class Step3FourierWindow(QMainWindow):
 
         fig_top.tight_layout()
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
+        full_time_action = QAction('📊 Build all data points (slow)', self)
+        full_time_action.triggered.connect(self.build_full_data_step3_time)
+        toolbar_top.addAction(full_time_action)
 
         # ==============================================================================
         # BOTTOM GRAPH: 0 < ω ≤ 0.1, log Y, interactive cutoff
@@ -2267,6 +2359,9 @@ class Step3FourierWindow(QMainWindow):
 
         fig_bottom.tight_layout()
         toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
+        full_spectrum_action = QAction('📊 Build full spectrum (slow)', self)
+        full_spectrum_action.triggered.connect(self.build_full_spectrum)
+        toolbar_bottom.addAction(full_spectrum_action)
 
         # ==============================================================================
         # CLICK HANDLER (only bottom graph)
@@ -2762,13 +2857,50 @@ class Step3FourierWindow(QMainWindow):
         def go_to_step4():
             comparison_window.close()
             self.close()
-            self.step4_window = Step4ProcessingWindow()
-            self.step4_window.show()
+            QApplication.processEvents()   # flush close repaints before heavy init
+            # Store on QApplication — outlives self (Step3 window being destroyed)
+            win = Step4ProcessingWindow()
+            QApplication.instance()._step4_window = win
+            win.show()
 
         btn_continue.clicked.connect(go_to_step4)
         layout.addWidget(btn_continue)
 
         comparison_window.exec_()
+
+    def build_full_data_step3_time(self):
+        """Load and plot full Step3 transformed time-domain data"""
+        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True); progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Transformed.csv...'))
+        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
+        progress.show(); QApplication.processEvents()
+        try:
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            df = pd.read_csv(script_dir / 'Output' / 'Step3_Transformed.csv', comment='#')
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            progress.close()
+            _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
+            QApplication.instance()._full_window = _w; _w.show()
+        except Exception as e:
+            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
+
+    def build_full_spectrum(self):
+        """Load and plot full spectrum data"""
+        progress = QDialog(self); progress.setWindowTitle('Loading Full Spectrum')
+        progress.setModal(True); progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Spectrum.csv...'))
+        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
+        progress.show(); QApplication.processEvents()
+        try:
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            df = pd.read_csv(script_dir / 'Output' / 'Step3_Spectrum.csv', comment='#')
+            progress.close()
+            _w = FullSpectrumWindow(df)
+            QApplication.instance()._full_spectrum_window = _w; _w.show()
+        except Exception as e:
+            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full spectrum:\n{str(e)}')
+
 class Step4ProcessingWindow(QMainWindow):
     """Window for Step 4: Spike removal and RMS filtering"""
 
@@ -2914,34 +3046,36 @@ class Step4ProcessingWindow(QMainWindow):
 
         step3_viz = output_folder / "Step3_Visualization.csv"
 
-        # Show progress dialog
-        progress_dialog = QDialog(self)
-        progress_dialog.setWindowTitle("Loading Data")
+        # Parent=None so the dialog is visible even before self is shown
+        progress_dialog = QDialog(None)
+        progress_dialog.setWindowTitle("Opening Step 4...")
         progress_dialog.setModal(True)
         progress_dialog.setFixedSize(500, 150)
+        progress_dialog.setWindowFlags(
+            progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
+        )
 
-        layout = QVBoxLayout(progress_dialog)
+        _lay = QVBoxLayout(progress_dialog)
 
-        label = QLabel("Loading Step3_Visualization.csv...")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
+        _lbl = QLabel("Step 4: Spike Removal & RMS Filtering")
+        _lbl.setAlignment(Qt.AlignCenter)
+        _lbl.setFont(QFont("Arial", 11, QFont.Bold))
+        _lay.addWidget(_lbl)
 
         progress_bar = QProgressBar()
         progress_bar.setRange(0, 100)
-        layout.addWidget(progress_bar)
+        _lay.addWidget(progress_bar)
 
-        status = QLabel("Loading visualization...")
+        status = QLabel("Loading Step3_Visualization.csv...")
         status.setAlignment(Qt.AlignCenter)
         status.setStyleSheet("color: #7f8c8d;")
-        layout.addWidget(status)
+        _lay.addWidget(status)
 
         progress_dialog.show()
         QApplication.processEvents()
 
         try:
-            # Load Step3_Visualization directly (already subsampled)
-            progress_bar.setValue(30)
-            status.setText("Reading Step3_Visualization.csv...")
+            progress_bar.setValue(20)
             QApplication.processEvents()
 
             # Read sensor frequency from this file's header
@@ -2950,20 +3084,30 @@ class Step4ProcessingWindow(QMainWindow):
             self.spline_freq_input.setMinimum(viz_sensor_freq)
             self.spline_freq_input.setValue(max(viz_sensor_freq, self.spline_freq_input.value()))
 
+            progress_bar.setValue(40)
+            status.setText("Reading data...")
+            QApplication.processEvents()
+
             df = pd.read_csv(step3_viz, comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
             progress_bar.setValue(70)
-            status.setText("Creating plot...")
+            status.setText("Building plot...")
             QApplication.processEvents()
 
-            progress_dialog.close()
-
-            # Create plot
+            # Create plot (can take a moment for large datasets)
             self.create_interactive_plot(df)
 
-            # Show window maximized AFTER data is loaded
+            progress_bar.setValue(95)
+            status.setText("Rendering...")
+            QApplication.processEvents()
+
+            # Show window maximized, then close the progress dialog
             self.showMaximized()
+            QApplication.processEvents()
+
+            progress_bar.setValue(100)
+            progress_dialog.close()
 
         except Exception as e:
             progress_dialog.close()
@@ -3023,6 +3167,9 @@ class Step4ProcessingWindow(QMainWindow):
 
         # Add navigation toolbar
         toolbar = NavigationToolbar2QT(canvas, self)
+        full_data_action = QAction('📊 Build all data points (slow)', self)
+        full_data_action.triggered.connect(self.build_full_data_step3)
+        toolbar.addAction(full_data_action)
 
         # Clear previous graph and add new one
         for i in reversed(range(self.graph_layout.count())):
@@ -3062,15 +3209,25 @@ class Step4ProcessingWindow(QMainWindow):
         def kh_solver(h, Tz):
             """Solve kh equation: x * tanh(x) = (4π²h)/(g*Tz²)"""
             from scipy.optimize import fsolve
+            import warnings
             g = 9.81
             target = (4 * np.pi**2 * h) / (g * Tz**2)
 
             def equation(x):
                 return x * np.tanh(x) - target
 
-            # Initial guess
-            x0 = 1.0
-            result = fsolve(equation, x0)[0]
+            # Adaptive initial guess based on target magnitude
+            if target < 1.0:
+                x0 = target           # small target → solution near 0
+            elif target < 10.0:
+                x0 = np.sqrt(target)  # moderate target
+            else:
+                x0 = target           # large target → solution is large
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                result = fsolve(equation, x0, full_output=False)[0]
+
             return max(0.01, result)  # Avoid division by zero
 
         def calculate_spectrum_params(arr, sensor_freq):
@@ -3083,11 +3240,9 @@ class Step4ProcessingWindow(QMainWindow):
             s = np.abs(rfft(arr * mask))
             w = rfftfreq(len(s), (1 / sensor_freq) / (2 * np.pi))
 
-            # Filter frequencies
-            if sensor_freq == 8:
-                n = 5.75
-            else:
-                n = np.pi
+            # Filter frequencies: use half-Nyquist as upper bound
+            # (sensor_freq * π is the Nyquist in rad/s; half gives a practical limit)
+            n = sensor_freq * np.pi / 2
             ind = w < n
             s = s[ind]
             w = w[ind]
@@ -3543,19 +3698,18 @@ class Step4ProcessingWindow(QMainWindow):
             else:
                 mean_Hs = mean_Tz = mean_eps = mean_BFI = 0
 
-            QMessageBox.information(
-                self,
-                "Success!",
-                f"✅ Step 3 processing complete!\n\n"
-                f"📊 Statistics:\n"
-                f"Total readings: {total_readings}\n"
-                f"Removed (low RMS): {len(removed_readings)}\n"
-                f"Spikes corrected: {len(spike_locations)}\n"
-                f"Remaining: {total_readings - len(removed_readings)}\n\n"
-                f"Files saved:\n"
-                f"• Step4_Filtered.csv\n"
-                f"• Parameters.csv (updated with 23 parameters)"
-            )
+            # Show pipeline complete window
+            stats = {
+                'total_readings':   total_readings,
+                'removed_rms':      len(removed_readings),
+                'spikes_corrected': len(spike_locations),
+                'remaining':        total_readings - len(removed_readings),
+                'mean_Hs':          mean_Hs,
+                'mean_Tz':          mean_Tz,
+            }
+            _cw = PipelineCompleteWindow(output_folder, stats)
+            QApplication.instance()._complete_window = _cw
+            _cw.show()
 
         except Exception as e:
             progress_dialog.close()
@@ -3565,6 +3719,284 @@ class Step4ProcessingWindow(QMainWindow):
                 "Error",
                 f"Processing failed:\n{str(e)}\n\n{traceback.format_exc()}"
             )
+
+
+    def build_full_data_step3(self):
+        """Load and plot full Step3 data in new window"""
+        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True); progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Transformed.csv...'))
+        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
+        progress.show(); QApplication.processEvents()
+        try:
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            df = pd.read_csv(script_dir / 'Output' / 'Step3_Transformed.csv', comment='#')
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            progress.close()
+            _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
+            QApplication.instance()._full_window = _w; _w.show()
+        except Exception as e:
+            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
+
+
+
+class FullDataWindow(QMainWindow):
+    def __init__(self, data_df, title):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.setGeometry(100, 100, 1400, 700)
+        central_widget = QWidget(); self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        info = QLabel(f"Total points: {len(data_df):,} | Memory: ~{len(data_df)*24/1024/1024:.1f} MB")
+        info.setStyleSheet("font-size: 12px; color: #7f8c8d; padding: 5px;")
+        layout.addWidget(info)
+        fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+        ax.plot(data_df['timestamp'], data_df['pressure'].values, linewidth=0.5, color='#3498db', alpha=0.8)
+        ax.set_xlabel('Date', fontsize=12); ax.set_ylabel('Pressure', fontsize=12)
+        ax.set_title(f'{title} — {len(data_df):,} points', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y'))
+        fig.autofmt_xdate(); fig.tight_layout()
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+        toolbar = NavigationToolbar2QT(canvas, self)
+        layout.addWidget(toolbar); layout.addWidget(canvas)
+        close_btn = QPushButton("Close"); close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+
+
+class FullSpectrumWindow(QMainWindow):
+    def __init__(self, spectrum_df):
+        super().__init__()
+        self.setWindowTitle("Full Spectrum")
+        self.setGeometry(100, 100, 1400, 700)
+        central_widget = QWidget(); self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        info = QLabel(f"Total frequency points: {len(spectrum_df):,}")
+        info.setStyleSheet("font-size: 12px; color: #7f8c8d; padding: 5px;")
+        layout.addWidget(info)
+        fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111)
+        freq = spectrum_df['frequency'].values
+        real = spectrum_df['real'].values; imag = spectrum_df['imag'].values
+        N = len(freq); omega_max = np.max(np.abs(freq)) if N > 0 else 1
+        s = (real**2 + imag**2) / (N * omega_max)
+        pos = freq > 0
+        ax.plot(freq[pos], s[pos], linewidth=0.8, color='#e74c3c')
+        ax.set_xlabel('ω, [rad/s]', fontsize=12); ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
+        ax.set_title(f'Full Spectrum — {pos.sum():,} points', fontsize=14, fontweight='bold')
+        ax.set_yscale('log'); ax.grid(True, alpha=0.3, which='both'); fig.tight_layout()
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+        toolbar = NavigationToolbar2QT(canvas, self)
+        layout.addWidget(toolbar); layout.addWidget(canvas)
+        close_btn = QPushButton("Close"); close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+
+
+
+class PipelineCompleteWindow(QDialog):
+    """Final window shown after Step 4 completes — export / cleanup / exit."""
+
+    # Files to KEEP (never deleted by "Clear cache")
+    KEEP_FILES = {'Parameters.csv', 'Step4_Filtered.csv'}
+
+    # All intermediate files (cache)
+    CACHE_FILES = [
+        'Step1_TXTtoCSV.csv',
+        'Step1_Visualization.csv',
+        'Step2_Initial_Cut.csv',
+        'Step2_Visualization.csv',
+        'Step2_Zero_Mean.csv',
+        'Step3_Spectrum.csv',
+        'Step3_Spectrum_Visualization.csv',
+        'Step3_Transformed.csv',
+        'Step3_Visualization.csv',
+    ]
+
+    def __init__(self, output_folder, stats):
+        super().__init__(None)
+        self.output_folder = Path(output_folder)
+        self.stats = stats
+        self.setWindowTitle("🎉 Pipeline Complete")
+        self.setFixedWidth(460)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        # ── Header ──────────────────────────────────────────────────────────
+        title = QLabel("✅  Step 4 complete!")
+        title.setFont(QFont("Arial", 16, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #27ae60; padding-bottom: 4px;")
+        layout.addWidget(title)
+
+        # ── Stats ────────────────────────────────────────────────────────────
+        s = self.stats
+        stats_text = (
+            f"<b>Readings processed:</b> {s['total_readings']}<br>"
+            f"<b>Removed (low RMS):</b> {s['removed_rms']}<br>"
+            f"<b>Spikes corrected:</b> {s['spikes_corrected']}<br>"
+            f"<b>Remaining readings:</b> {s['remaining']}<br>"
+            f"<b>Mean H<sub>s</sub>:</b> {s['mean_Hs']:.4f} m&nbsp;&nbsp;"
+            f"<b>Mean T<sub>z</sub>:</b> {s['mean_Tz']:.2f} s"
+        )
+        stats_lbl = QLabel(stats_text)
+        stats_lbl.setStyleSheet(
+            "background:#f0f3f7; border-radius:6px; padding:10px 14px;"
+            "font-size:13px; color:#2c3e50;"
+        )
+        stats_lbl.setTextFormat(Qt.RichText)
+        layout.addWidget(stats_lbl)
+
+        # ── Kept files note ──────────────────────────────────────────────────
+        kept_lbl = QLabel(
+            "<b>Output files:</b><br>"
+            "• <tt>Parameters.csv</tt> — wave parameters for all readings<br>"
+            "• <tt>Step4_Filtered.csv</tt> — filtered pressure time-series"
+        )
+        kept_lbl.setTextFormat(Qt.RichText)
+        kept_lbl.setStyleSheet("font-size:12px; color:#555; padding: 4px 0;")
+        layout.addWidget(kept_lbl)
+
+        layout.addSpacing(4)
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        # 1. Clear cache
+        btn_cache = QPushButton("🗑️  Clear cache  (keep Parameters & Filtered)")
+        btn_cache.setStyleSheet("""
+            QPushButton {
+                background:#ecf0f1; color:#2c3e50; font-size:13px;
+                padding:10px; border-radius:5px; border:1px solid #bdc3c7;
+            }
+            QPushButton:hover { background:#d5d8dc; }
+        """)
+        btn_cache.clicked.connect(self._clear_cache)
+        layout.addWidget(btn_cache)
+
+        # 2. Save / export
+        btn_save = QPushButton("💾  Export data…")
+        btn_save.setStyleSheet("""
+            QPushButton {
+                background:#2980b9; color:white; font-size:13px;
+                padding:10px; border-radius:5px;
+            }
+            QPushButton:hover { background:#2471a3; }
+        """)
+        btn_save.clicked.connect(self._export_data)
+        layout.addWidget(btn_save)
+
+        # 3. Exit
+        btn_exit = QPushButton("✖  Exit")
+        btn_exit.setStyleSheet("""
+            QPushButton {
+                background:#e74c3c; color:white; font-size:13px;
+                font-weight:bold; padding:10px; border-radius:5px;
+            }
+            QPushButton:hover { background:#c0392b; }
+        """)
+        btn_exit.clicked.connect(QApplication.quit)
+        layout.addWidget(btn_exit)
+
+    # ── Actions ──────────────────────────────────────────────────────────────
+
+    def _clear_cache(self):
+        deleted, missing = [], []
+        for fname in self.CACHE_FILES:
+            fp = self.output_folder / fname
+            if fp.exists():
+                try:
+                    fp.unlink()
+                    deleted.append(fname)
+                except Exception as e:
+                    missing.append(f"{fname} ({e})")
+            else:
+                missing.append(f"{fname} (not found)")
+
+        msg = f"Deleted {len(deleted)} file(s)."
+        if deleted:
+            msg += "\n\nRemoved:\n" + "\n".join(f"  • {f}" for f in deleted)
+        if missing:
+            msg += "\n\nSkipped:\n" + "\n".join(f"  • {f}" for f in missing)
+        QMessageBox.information(self, "Cache cleared", msg)
+
+    def _export_data(self):
+        """Export Step4_Filtered.csv and Parameters.csv in chosen format."""
+        fmt_dialog = QDialog(self)
+        fmt_dialog.setWindowTitle("Export format")
+        fmt_dialog.setFixedWidth(320)
+        fl = QVBoxLayout(fmt_dialog)
+        fl.addWidget(QLabel("Choose export format:"))
+
+        formats = [
+            ("Text (.txt) — tab-separated",          "txt"),
+            ("MATLAB (.mat) — scipy.io.savemat",      "mat"),
+        ]
+        radios = []
+        for label, key in formats:
+            rb = QRadioButton(label)
+            fl.addWidget(rb)
+            radios.append((rb, key))
+        radios[0][0].setChecked(True)
+
+        btn_row = QHBoxLayout()
+        ok_btn  = QPushButton("Export"); ok_btn.clicked.connect(fmt_dialog.accept)
+        cxl_btn = QPushButton("Cancel"); cxl_btn.clicked.connect(fmt_dialog.reject)
+        btn_row.addWidget(ok_btn); btn_row.addWidget(cxl_btn)
+        fl.addLayout(btn_row)
+
+        if fmt_dialog.exec_() != QDialog.Accepted:
+            return
+
+        chosen = next(key for rb, key in radios if rb.isChecked())
+
+        dest_dir = QFileDialog.getExistingDirectory(
+            self, "Select destination folder", str(self.output_folder)
+        )
+        if not dest_dir:
+            return
+        dest_dir = Path(dest_dir)
+
+        exported = []
+        errors   = []
+
+        for fname in ("Step4_Filtered.csv", "Parameters.csv"):
+            src = self.output_folder / fname
+            if not src.exists():
+                errors.append(f"{fname} not found"); continue
+            try:
+                df = pd.read_csv(src, comment='#')
+                stem = src.stem
+
+                if chosen == "txt":
+                    out = dest_dir / f"{stem}.txt"
+                    df.to_csv(out, sep='\t', index=False)
+                    exported.append(out.name)
+
+                elif chosen == "mat":
+                    from scipy.io import savemat
+                    out = dest_dir / f"{stem}.mat"
+                    # Convert to dict of numpy arrays (MATLAB-compatible names)
+                    mat_dict = {
+                        col.replace(' ', '_').replace('-', '_'): df[col].values
+                        for col in df.columns
+                    }
+                    savemat(str(out), mat_dict)
+                    exported.append(out.name)
+
+            except Exception as e:
+                errors.append(f"{fname}: {e}")
+
+        msg = f"Exported {len(exported)} file(s) to:\n{dest_dir}"
+        if exported:
+            msg += "\n\n" + "\n".join(f"  • {f}" for f in exported)
+        if errors:
+            msg += "\n\nErrors:\n" + "\n".join(f"  • {e}" for e in errors)
+        QMessageBox.information(self, "Export complete", msg)
 
 
 def main():
