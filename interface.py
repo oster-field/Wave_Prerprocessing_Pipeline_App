@@ -851,12 +851,11 @@ class MainWindow(QMainWindow):
 
     def open_visualization_window(self):
         """Open visualization window"""
-        # Close current window
+        # Create BEFORE closing self — store on QApplication to prevent GC
+        viz = VisualizationWindow(self.processed_data)
+        QApplication.instance()._viz_window = viz
+        viz.show()
         self.close()
-
-        # Open visualization window
-        self.viz_window = VisualizationWindow(self.processed_data)
-        self.viz_window.show()
 
     def apply_global_styles(self):
         """Применить глобальные стили"""
@@ -928,8 +927,7 @@ class VisualizationWindow(QMainWindow):
         layout.addWidget(header)
 
         # Info label
-        info_text = (f"Total points: {len(self.data_df):,} | "
-                    f"Readings: {self.data_df['reading_number'].max()} | "
+        info_text = (f"Readings: {self.data_df['reading_number'].max()} | "
                     f"Frequency: {self.data_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz")
         info_label = QLabel(info_text)
         info_label.setAlignment(Qt.AlignCenter)
@@ -987,8 +985,7 @@ class VisualizationWindow(QMainWindow):
         self.btn_manual.clicked.connect(self.on_manual_removal)
         btn_layout.addWidget(self.btn_manual)
 
-        # Disable manual removal button if dive detector found nothing
-        self._update_manual_btn_state()
+        self._update_manual_btn_state()  # btn_manual exists now; reads _has_dives from create_plot
 
         layout.addLayout(btn_layout)
 
@@ -996,11 +993,12 @@ class VisualizationWindow(QMainWindow):
 
     def create_plot(self):
         """Create matplotlib plot - optimized for speed"""
-        from PyQt5.QtWidgets import QDesktopWidget
 
         # Get screen resolution for adaptive subsampling
-        screen = QDesktopWidget().screenGeometry()
-        screen_width = screen.width()
+        try:
+            screen_width = QApplication.primaryScreen().size().width()
+        except Exception:
+            screen_width = 1920  # safe fallback
 
         # Adaptive point count based on screen resolution
         # Base: 5000 points for FullHD (optimal by Nyquist theorem)
@@ -1179,14 +1177,10 @@ class VisualizationWindow(QMainWindow):
 
 
     def _update_manual_btn_state(self):
-        """Enable btn_manual only if dive detector found at least one leg."""
-        # Re-run detection on viz data to check result
-        surface_displacement_viz = self.data_df.iloc[
-            ::max(1, len(self.data_df) // 10000)
-        ]['surface_displacement'].values
-        dive_mask = self.detect_dives(surface_displacement_viz)
-        has_dives = dive_mask.sum() > 0
-        self.btn_manual.setEnabled(has_dives)
+        """Enable btn_manual only if dive detector found at least one leg.
+        Reads self._has_dives set by create_plot() to avoid duplicate detection."""
+        has_dives = getattr(self, '_has_dives', True)  # True = enabled by default if plot not yet run
+        self.btn_manual.setEnabled(bool(has_dives))
         if not has_dives:
             self.btn_manual.setToolTip(
                 "Dive detector found no deployment/retrieval legs in this dataset."
@@ -1358,7 +1352,7 @@ class VisualizationWindow(QMainWindow):
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 1: Full Raw Data')
-            QApplication.instance()._full_window = _w; _w.show()
+            self._full_window = _w; _w.show()
         except Exception as e:
             progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
@@ -1377,7 +1371,7 @@ class ManualRemovalWindow(QMainWindow):
     def __init__(self, viz_data_df):
         super().__init__()
         self.viz_data_df = viz_data_df  # Subsampled visualization data
-        self.cut_indices = {'beginning': None, 'ending': None}  # Store cut points in viz data
+        self.cut_timestamps = {'beginning': None, 'ending': None}  # Store cut timestamps (work for both viz and full data)
         self.cut_lines = {}  # Store cut line references for each graph
         self.shaded_regions = {}  # Store shaded region references
         self.init_ui()
@@ -1404,9 +1398,9 @@ class ManualRemovalWindow(QMainWindow):
 
         # Instructions
         instructions = QLabel(
-            "Click on the graph to mark cut point. "
-            "Deployment: removes everything BEFORE click. "
-            "Retrieval: removes everything AFTER click."
+            "Double-click on the graph to mark cut point. "
+            "Deployment: removes everything BEFORE double-click. "
+            "Retrieval: removes everything AFTER double-click."
         )
         instructions.setAlignment(Qt.AlignCenter)
         instructions.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
@@ -1421,7 +1415,7 @@ class ManualRemovalWindow(QMainWindow):
             beginning_layout = QVBoxLayout()
             self.beginning_canvas = self.create_interactive_plot(
                 self.beginning_data,
-                "Deployment - Click to mark cut point",
+                "Deployment - Double-click to mark cut point",
                 'beginning'
             )
             beginning_layout.addWidget(self.beginning_canvas)
@@ -1434,7 +1428,7 @@ class ManualRemovalWindow(QMainWindow):
             ending_layout = QVBoxLayout()
             self.ending_canvas = self.create_interactive_plot(
                 self.ending_data,
-                "Retrieval - Click to mark cut point",
+                "Retrieval - Double-click to mark cut point",
                 'ending'
             )
             ending_layout.addWidget(self.ending_canvas)
@@ -1593,7 +1587,7 @@ class ManualRemovalWindow(QMainWindow):
         return dive_mask
 
     def create_interactive_plot(self, data, title, leg_type):
-        """Create interactive matplotlib plot with click handler - full data with zoom"""
+        """Create interactive matplotlib plot with double-click handler - full data with zoom"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
         # Taller figure for vertical layout
@@ -1653,64 +1647,56 @@ class ManualRemovalWindow(QMainWindow):
         self.cut_lines[leg_type] = None
         self.shaded_regions[leg_type] = None
 
-        # Click handler
+        # Double-click handler
         def on_click(event):
-            if event.inaxes == ax and event.button == 1:  # Left click
-                # Remove previous cut line and shading
-                if self.cut_lines[leg_type]:
-                    self.cut_lines[leg_type].remove()
+            if event.inaxes == ax and event.button == 1 and event.dblclick:  # Left double-click
+                # Safely remove previous cut line — object may be stale after ax.cla()
+                if self.cut_lines[leg_type] is not None:
+                    try:
+                        self.cut_lines[leg_type].remove()
+                    except Exception:
+                        pass
                     self.cut_lines[leg_type] = None
 
-                if self.shaded_regions[leg_type]:
-                    self.shaded_regions[leg_type].remove()
+                # Safely remove previous shading
+                if self.shaded_regions[leg_type] is not None:
+                    try:
+                        self.shaded_regions[leg_type].remove()
+                    except Exception:
+                        pass
                     self.shaded_regions[leg_type] = None
 
-                # Draw vertical line at click (event.xdata is already a number)
-                self.cut_lines[leg_type] = ax.axvline(event.xdata, color='green',
-                                                       linewidth=2, linestyle='--',
-                                                       label='Cut point', zorder=10)
+                # Draw vertical line at double-click position
+                self.cut_lines[leg_type] = ax.axvline(
+                    event.xdata, color='green', linewidth=2,
+                    linestyle='--', label='Cut point', zorder=10
+                )
 
                 # Convert clicked x-position to datetime (make tz-naive)
                 clicked_time = pd.Timestamp(mdates.num2date(event.xdata)).tz_localize(None)
 
-                # Find closest index in viz data
-                time_diff = np.abs((full_timestamps - clicked_time).dt.total_seconds())
-                viz_idx = time_diff.argmin()
-
-                # Add red shading for region to be removed
-                # Convert timestamps to matplotlib numbers for axvspan
+                # Use current axis limits for shading — works for both viz and full-res graph
+                cur_xlim = ax.get_xlim()
                 if leg_type == 'beginning':
                     # Shade everything BEFORE the cut (left side)
-                    x_start = mdates.date2num(full_timestamps.iloc[0])
-                    x_end = event.xdata  # Already a number
                     self.shaded_regions[leg_type] = ax.axvspan(
-                        x_start,
-                        x_end,
-                        alpha=0.3,
-                        color='red',
-                        zorder=1,
-                        label='To be removed'
+                        cur_xlim[0], event.xdata,
+                        alpha=0.3, color='red', zorder=1, label='To be removed'
                     )
                 else:  # ending
                     # Shade everything AFTER the cut (right side)
-                    x_start = event.xdata  # Already a number
-                    x_end = mdates.date2num(full_timestamps.iloc[-1])
                     self.shaded_regions[leg_type] = ax.axvspan(
-                        x_start,
-                        x_end,
-                        alpha=0.3,
-                        color='red',
-                        zorder=1,
-                        label='To be removed'
+                        event.xdata, cur_xlim[1],
+                        alpha=0.3, color='red', zorder=1, label='To be removed'
                     )
 
                 canvas.draw()
 
-                # Store cut index
-                self.cut_indices[leg_type] = viz_idx
-                print(f"{leg_type} cut at viz data index: {viz_idx}")
+                # Store cut timestamp — works for both subsampled and full-resolution graphs
+                self.cut_timestamps[leg_type] = clicked_time
+                print(f"{leg_type} cut at timestamp: {clicked_time}")
 
-        canvas.mpl_connect('button_press_event', on_click)
+        canvas.mpl_connect('button_press_event', on_click)  # dblclick fires button_press_event with event.dblclick=True
 
         fig.tight_layout()
 
@@ -1735,46 +1721,71 @@ class ManualRemovalWindow(QMainWindow):
                 ts  = df_full['timestamp']
                 prs = df_full['surface_displacement'].values
 
-                # Remember current xlim so zoom is preserved
+                # Remember current view state before clearing
                 cur_xlim = _ax.get_xlim()
+                cur_ylim = _ax.get_ylim()
+                cur_title = _ax.get_title().split(' —')[0]  # strip old suffix
 
-                # Clear only data lines (keep cut line / shading drawn by user)
-                # Lines added by this function are tagged with gid='full_data'
-                for line in list(_ax.lines):
-                    if line.get_gid() in ('viz_line', 'dive_highlight', 'full_data'):
-                        line.remove()
-                for coll in list(_ax.collections):
-                    if getattr(coll, '_full_data_replace', False):
-                        coll.remove()
+                # Save user's cut line and shading (we'll re-add them after)
+                saved_cut_line_x = None
+                if self.cut_lines.get(_lt):
+                    try:
+                        saved_cut_line_x = self.cut_lines[_lt].get_xdata()[0]
+                    except Exception:
+                        pass
+                saved_shading = None
+                if self.shaded_regions.get(_lt):
+                    try:
+                        verts = self.shaded_regions[_lt].get_paths()[0].vertices
+                        saved_shading = (float(verts[:, 0].min()), float(verts[:, 0].max()))
+                    except Exception:
+                        pass
 
-                # Draw full data
-                l, = _ax.plot(ts, prs, linewidth=0.3, color='#3498db', alpha=0.8)
-                l.set_gid('full_data')
+                # Fully clear the axes and redraw from scratch
+                _ax.cla()
+
+                # Draw full (non-subsampled) data
+                _ax.plot(ts, prs, linewidth=0.3, color='#3498db', alpha=0.8)
 
                 # Re-draw dive highlight
                 if _lt == 'beginning' and self.beginning_viz_range:
                     s, e = self.beginning_viz_range
-                    # Map viz indices to full-data timestamps
                     viz_ts = self.viz_data_df['timestamp']
                     t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
                     mask = (ts >= t0) & (ts <= t1)
-                    hl, = _ax.plot(ts[mask], prs[mask], linewidth=0.6,
-                                   color='#e74c3c', alpha=0.9, label='Detected dive')
-                    hl.set_gid('full_data')
+                    _ax.plot(ts[mask], prs[mask], linewidth=0.6,
+                             color='#e74c3c', alpha=0.9, label='Detected dive')
                 elif _lt == 'ending' and self.ending_viz_range:
                     s, e = self.ending_viz_range
                     viz_ts = self.viz_data_df['timestamp']
                     t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
                     mask = (ts >= t0) & (ts <= t1)
-                    hl, = _ax.plot(ts[mask], prs[mask], linewidth=0.6,
-                                   color='#e74c3c', alpha=0.9, label='Detected dive')
-                    hl.set_gid('full_data')
+                    _ax.plot(ts[mask], prs[mask], linewidth=0.6,
+                             color='#e74c3c', alpha=0.9, label='Detected dive')
 
-                _ax.set_xlim(cur_xlim)   # restore zoom
+                # Restore user's cut line and shading if they had set one
+                if saved_cut_line_x is not None:
+                    self.cut_lines[_lt] = _ax.axvline(
+                        saved_cut_line_x, color='green', linewidth=2,
+                        linestyle='--', label='Cut point', zorder=10
+                    )
+                if saved_shading is not None:
+                    x0, x1 = saved_shading
+                    self.shaded_regions[_lt] = _ax.axvspan(
+                        x0, x1, alpha=0.3, color='red', zorder=1,
+                        label='To be removed'
+                    )
+
+                # Restore formatting
+                import matplotlib.dates as _mdates2
+                _ax.xaxis.set_major_formatter(_mdates2.DateFormatter('%d-%m %H:%M'))
+                _ax.grid(True, alpha=0.3)
+                _ax.legend(loc='upper right', fontsize=9)
                 _ax.set_title(
-                    _ax.get_title().replace(' (subsampled)', '') + f' — {len(prs):,} pts',
+                    f'{cur_title} — {len(prs):,} pts (full resolution)',
                     fontsize=12, fontweight='bold'
                 )
+                _ax.set_xlim(cur_xlim)
                 _canvas.draw()
             except Exception as ex:
                 QMessageBox.critical(self, 'Error', f'Could not load full data:\n{ex}')
@@ -1843,26 +1854,34 @@ class ManualRemovalWindow(QMainWindow):
             status.setText("Converting indices from visualization to full data...")
             QApplication.processEvents()
 
-            # Calculate subsampling step (how we created viz data)
-            subsample_step = len(full_data) // len(self.viz_data_df)
+            # Helper: find closest index in full_data by timestamp
+            def _ts_to_full_idx(ts):
+                diff = np.abs((full_data['timestamp'] - ts).dt.total_seconds())
+                return int(diff.argmin())
 
-            # Convert viz indices to full data indices
+            # Helper: convert viz index → timestamp → full data index
+            subsample_step = len(full_data) // len(self.viz_data_df)
+            def _viz_idx_to_full_idx(viz_idx):
+                viz_ts = self.viz_data_df['timestamp'].iloc[viz_idx]
+                return _ts_to_full_idx(viz_ts)
+
+            # Determine cut points in full data
             beginning_full_idx = None
             ending_full_idx = None
 
-            if self.cut_indices['beginning'] is not None:
-                # User clicked - use that point
-                beginning_full_idx = self.cut_indices['beginning'] * subsample_step
+            if self.cut_timestamps['beginning'] is not None:
+                # User double-clicked — find exact position in full data by timestamp
+                beginning_full_idx = _ts_to_full_idx(self.cut_timestamps['beginning'])
             elif self.beginning_viz_range:
-                # No click - use end of detected leg
-                beginning_full_idx = self.beginning_viz_range[1] * subsample_step
+                # No click — use end of auto-detected leg
+                beginning_full_idx = _viz_idx_to_full_idx(self.beginning_viz_range[1])
 
-            if self.cut_indices['ending'] is not None:
-                # User clicked - use that point
-                ending_full_idx = self.cut_indices['ending'] * subsample_step
+            if self.cut_timestamps['ending'] is not None:
+                # User double-clicked — find exact position in full data by timestamp
+                ending_full_idx = _ts_to_full_idx(self.cut_timestamps['ending'])
             elif self.ending_viz_range:
-                # No click - use start of detected leg
-                ending_full_idx = self.ending_viz_range[0] * subsample_step
+                # No click — use start of auto-detected leg
+                ending_full_idx = _viz_idx_to_full_idx(self.ending_viz_range[0])
 
             progress_bar.setValue(60)
             status.setText("Trimming data...")
@@ -2023,7 +2042,7 @@ class ManualRemovalWindow(QMainWindow):
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 2: Full Initial Cut Data')
-            QApplication.instance()._full_window = _w; _w.show()
+            self._full_window = _w; _w.show()
         except Exception as e:
             progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
@@ -2447,8 +2466,8 @@ class Step3FourierWindow(QMainWindow):
         toolbar_bottom.addAction(full_spectrum_action)
 
         # ==============================================================================
-        # CLICK HANDLER (only bottom graph)
-        # Click sets cutoff - everything BELOW (left of) cutoff is removed
+        # DOUBLE-CLICK HANDLER (only bottom graph)
+        # Double-click sets cutoff - everything BELOW (left of) cutoff is removed
         # ==============================================================================
 
         self.cutoff_line = None
@@ -2456,7 +2475,7 @@ class Step3FourierWindow(QMainWindow):
         self.cutoff_text = None  # Text annotation on top graph
 
         def on_click(event):
-            if event.inaxes == ax_bottom and event.button == 1:  # Left click
+            if event.inaxes == ax_bottom and event.button == 1 and event.dblclick:  # Left double-click
                 # Remove previous
                 if self.cutoff_line:
                     self.cutoff_line.remove()
@@ -2995,11 +3014,12 @@ class Step4ProcessingWindow(QMainWindow):
         super().__init__()
         self.current_reading = 0  # Track which reading is being processed
         self.init_ui()
-        # Don't show yet - wait until data is loaded
-        self.load_and_visualize()
+        # Load after event loop starts so the window is visible first
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, self.load_and_visualize)
 
     def init_ui(self):
-        """Initialize Step 3 window"""
+        """Initialize Step 4 window"""
         self.setWindowTitle("🌊 Step 4: Spike Removal & RMS Filtering")
         # Don't show maximized here - will show after data loads
 
@@ -3290,7 +3310,7 @@ class Step4ProcessingWindow(QMainWindow):
             try:
                 rms_text = self.rms_input.text().strip()
                 rms_threshold = float(rms_text)
-            except:
+            except Exception:
                 rms_threshold = 0.015
 
         # Helper functions for wave analysis
@@ -3401,7 +3421,7 @@ class Step4ProcessingWindow(QMainWindow):
                         rho = 1
                 else:
                     rho = 0
-            except:
+            except Exception:
                 rho = 0
 
             return Q, nu, eps_width, rho
@@ -3420,7 +3440,7 @@ class Step4ProcessingWindow(QMainWindow):
 
                 gamma = v * np.sqrt(np.abs(b) / abs(a))
                 return gamma
-            except:
+            except Exception:
                 return 0
 
         def calculate_Tz(arr, sensor_freq):
@@ -3435,7 +3455,7 @@ class Step4ProcessingWindow(QMainWindow):
                 else:
                     Tz = 10.0  # Default
                 return Tz
-            except:
+            except Exception:
                 return 10.0
 
         # Show progress dialog
@@ -3822,7 +3842,7 @@ class Step4ProcessingWindow(QMainWindow):
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
-            QApplication.instance()._full_window = _w; _w.show()
+            self._full_window = _w; _w.show()
         except Exception as e:
             progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
@@ -3943,8 +3963,6 @@ class PipelineCompleteWindow(QDialog):
             f"<b>Removed (low RMS):</b> {s['removed_rms']}<br>"
             f"<b>Spikes corrected:</b> {s['spikes_corrected']}<br>"
             f"<b>Remaining readings:</b> {s['remaining']}<br>"
-            f"<b>Mean H<sub>s</sub>:</b> {s['mean_Hs']:.4f} m&nbsp;&nbsp;"
-            f"<b>Mean T<sub>z</sub>:</b> {s['mean_Tz']:.2f} s"
         )
         stats_lbl = QLabel(stats_text)
         stats_lbl.setStyleSheet(
@@ -4131,6 +4149,30 @@ class PipelineCompleteWindow(QDialog):
         QMessageBox.information(self, "Export complete", msg)
 
 
+def clear_output_folder(output_folder):
+    """Delete all pipeline output files so user starts from scratch."""
+    all_files = [
+        'Step1_TXTtoCSV.csv',
+        'Step1_Visualization.csv',
+        'Step2_Initial_Cut.csv',
+        'Step2_Visualization.csv',
+        'Step2_Zero_Mean.csv',
+        'Step3_Spectrum.csv',
+        'Step3_Spectrum_Visualization.csv',
+        'Step3_Transformed.csv',
+        'Step3_Visualization.csv',
+        'Parameters.csv',
+        'Step4_Filtered.csv',
+    ]
+    for fname in all_files:
+        p = Path(output_folder) / fname
+        try:
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+
 def main():
     """Launch application"""
     app = QApplication(sys.argv)
@@ -4161,6 +4203,13 @@ def main():
             app.instance()._step4_window = step4_window  # keep alive — prevent GC
             step4_window.show()
             sys.exit(app.exec_())
+        else:
+            # User wants to start from scratch — delete all output files
+            clear_output_folder(output_folder)
+            window = MainWindow()
+            QApplication.instance()._main_window = window
+            window.show()
+            sys.exit(app.exec_())
 
     # CHECKPOINT 2: Check if Step2_Zero_Mean exists (Step 2 complete)
     step2_zero_mean = output_folder / "Step2_Zero_Mean.csv"
@@ -4186,6 +4235,13 @@ def main():
             app.instance()._step3_window = step3_window  # prevent GC
             step3_window.show()
             sys.exit(app.exec_())
+        else:
+            # User wants to start from scratch — delete all output files
+            clear_output_folder(output_folder)
+            window = MainWindow()
+            QApplication.instance()._main_window = window
+            window.show()
+            sys.exit(app.exec_())
 
     # CHECKPOINT 1: Check if Step1 CSV already exists
     csv_file = output_folder / "Step1_TXTtoCSV.csv"
@@ -4201,6 +4257,14 @@ def main():
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
+
+        if reply == QMessageBox.No:
+            # User wants to start from scratch — delete all output files
+            clear_output_folder(output_folder)
+            window = MainWindow()
+            QApplication.instance()._main_window = window
+            window.show()
+            sys.exit(app.exec_())
 
         if reply == QMessageBox.Yes:
             try:
