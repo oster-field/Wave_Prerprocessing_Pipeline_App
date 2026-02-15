@@ -4143,59 +4143,39 @@ class PipelineCompleteWindow(QDialog):
 
 
                 elif chosen == "mat":
-
                     from scipy.io import savemat
-
                     out = dest_dir / f"{stem}.mat"
-
                     mat_dict = {}
-
                     for col in df.columns:
 
                         safe = col.replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '').replace('/',
                                                                                                                  '_')
 
                         vals = df[col].values
-
                         if col == 'timestamp':
-
                             try:
-
                                 ts = pd.to_datetime(vals, errors='coerce')
-
                                 epoch = pd.Timestamp('0000-01-01')
-
                                 days_since_epoch = (ts - epoch).dt.total_seconds() / 86400.0
-
                                 mat_dict['timestamp'] = days_since_epoch.values.astype(float)
-
                             except Exception:
-
                                 continue
-
                             continue
 
                         if vals.dtype == object or str(vals.dtype).startswith('<U'):
-
                             try:
-
                                 vals = pd.to_numeric(vals, errors='coerce')
-
                                 if np.all(np.isnan(vals)):
                                     continue
 
                             except Exception:
-
                                 continue
 
                         mat_dict[safe] = vals.astype(float)
 
                     if mat_dict:
-
                         savemat(str(out), mat_dict, do_compression=True)
-
                         exported.append(out.name)
-
                     else:
 
                         errors.append(f"{fname}: No numeric data")
