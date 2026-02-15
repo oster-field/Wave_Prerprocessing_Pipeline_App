@@ -1026,6 +1026,9 @@ class VisualizationWindow(QMainWindow):
         # Detect dives
         dive_mask = self.detect_dives(data_to_plot['surface_displacement'].values)
 
+        # Save result for button state update
+        self._has_dives = bool(dive_mask.sum() > 0)
+
         # Convert timestamps
         timestamps = pd.to_datetime(data_to_plot['timestamp'], errors='coerce')
         surface_displacement = data_to_plot['surface_displacement'].values
@@ -3148,6 +3151,7 @@ class Step4ProcessingWindow(QMainWindow):
 
     def load_and_visualize(self):
         """Load Step3_Visualization and create plot"""
+        self.hide()  # Скрыть окно во время загрузки
         script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
         output_folder = script_dir / "Output"
 
@@ -3209,13 +3213,9 @@ class Step4ProcessingWindow(QMainWindow):
             status.setText("Rendering...")
             QApplication.processEvents()
 
-            # Show window maximized — deferred for checkpoint-start compatibility
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(0, self.showMaximized)
-            QApplication.processEvents()
-
             progress_bar.setValue(100)
             progress_dialog.close()
+            self.showMaximized()
 
         except Exception as e:
             progress_dialog.close()
@@ -4018,10 +4018,82 @@ class PipelineCompleteWindow(QDialog):
             }
             QPushButton:hover { background:#c0392b; }
         """)
-        btn_exit.clicked.connect(QApplication.quit)
+        btn_exit.clicked.connect(self.on_exit_with_rename)
         layout.addWidget(btn_exit)
 
     # ── Actions ──────────────────────────────────────────────────────────────
+
+    def on_exit_with_rename(self):
+        """Exit application and rename Output folder with date range"""
+        try:
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            output_folder = script_dir / "Output"
+            info_file = script_dir / "INFO.dat"
+
+            # Check if Output folder exists
+            if not output_folder.exists():
+                QApplication.quit()
+                return
+
+            # Try to read dates from INFO.dat
+            date_start = None
+            date_end = None
+
+            if info_file.exists():
+                try:
+                    # Read INFO.dat with different encodings
+                    content = None
+                    for encoding in ['utf-8', 'windows-1251', 'cp1251', 'latin-1']:
+                        try:
+                            with open(info_file, 'r', encoding=encoding, errors='ignore') as f:
+                                content = f.read()
+                            break
+                        except Exception:
+                            continue
+
+                    if content:
+                        # Extract dates using regex
+                        import re
+                        dt_pattern = re.compile(r'(\d{4}\.\d{2}\.\d{2})\s+\d{2}:\d{2}:\d{2}')
+                        dates = dt_pattern.findall(content)
+
+                        if len(dates) >= 2:
+                            date_start = dates[0].replace('.', '-')  # 2014.11.23 → 2014-11-23
+                            date_end = dates[1].replace('.', '-')
+                        elif len(dates) == 1:
+                            date_start = dates[0].replace('.', '-')
+                            date_end = date_start
+                except Exception:
+                    pass
+
+            # Rename folder if dates found
+            if date_start and date_end:
+                new_name = f"Output_{date_start}_{date_end}"
+                new_path = script_dir / new_name
+
+                # Avoid name collision
+                counter = 1
+                while new_path.exists():
+                    new_name = f"Output_{date_start}_{date_end}_{counter}"
+                    new_path = script_dir / new_name
+                    counter += 1
+
+                # Rename
+                output_folder.rename(new_path)
+
+                # Show confirmation
+                QMessageBox.information(
+                    self,
+                    "Folder Renamed",
+                    f"Output folder renamed to:\n{new_name}"
+                )
+
+        except Exception as e:
+            # If rename fails, just quit without error message
+            print(f"Could not rename Output folder: {e}")
+
+        # Close application
+        QApplication.quit()
 
     def _clear_cache(self):
         deleted, missing = [], []
@@ -4127,8 +4199,8 @@ class PipelineCompleteWindow(QDialog):
                         if vals.dtype == object or str(vals.dtype).startswith('<U'):
                             try:
                                 # Try to convert timestamps to float (unix seconds)
-                                vals = pd.to_datetime(vals, errors='coerce')                                          .astype('int64') / 1e9
-                                vals = vals.to_numpy().astype(float)
+                                vals = pd.to_datetime(vals, errors='coerce').astype('int64') / 1e9
+                                vals = vals.astype(float)
                                 safe = safe + '_unixtime'
                             except Exception:
                                 continue  # skip unconvertible string columns
@@ -4180,6 +4252,57 @@ def main():
 
     script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
     output_folder = script_dir / "Output"
+
+    # CHECKPOINT 4: Check if Step4_Filtered exists (Pipeline complete)
+    step4_filtered = output_folder / "Step4_Filtered.csv"
+    parameters = output_folder / "Parameters.csv"
+
+    if step4_filtered.exists() and parameters.exists():
+        reply = QMessageBox.question(
+            None,
+            "Pipeline Complete!",
+            f"Found completed pipeline:\n"
+            f"• Step4_Filtered.csv\n"
+            f"• Parameters.csv\n\n"
+            "View results or start from scratch?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            # Read basic stats from files for display
+            try:
+                params_df = pd.read_csv(parameters, comment='#')
+                total_readings = len(params_df)
+                mean_Hs = params_df['Hs'].mean() if 'Hs' in params_df.columns else 0.0
+                mean_Tz = params_df['Tz'].mean() if 'Tz' in params_df.columns else 0.0
+
+                stats = {
+                    'total_readings': total_readings,
+                    'removed_rms': 0,  # Not tracked in checkpoint
+                    'spikes_corrected': 0,  # Not tracked in checkpoint
+                    'remaining': total_readings,
+                    'mean_Hs': mean_Hs,
+                    'mean_Tz': mean_Tz
+                }
+
+                complete_window = PipelineCompleteWindow(output_folder, stats)
+                complete_window.exec_()
+                sys.exit(0)
+            except Exception as e:
+                QMessageBox.warning(
+                    None,
+                    "Error",
+                    f"Could not read results:\n{str(e)}\n\nStarting from Step 4 instead."
+                )
+                # Fall through to checkpoint 3
+        else:
+            # User wants to start from scratch
+            clear_output_folder(output_folder)
+            window = MainWindow()
+            QApplication.instance()._main_window = window
+            window.show()
+            sys.exit(app.exec_())
 
     # CHECKPOINT 3: Check if Step3_Transformed exists
     step3_transformed = output_folder / "Step3_Transformed.csv"
