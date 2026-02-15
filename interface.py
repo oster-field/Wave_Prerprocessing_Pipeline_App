@@ -2298,8 +2298,8 @@ class Step3FourierWindow(QMainWindow):
         N = len(self.spectrum_full)
         omega_max = np.max(np.abs(self.frequencies_full))
 
-        # Top graph: subsampled, ω > 0.05 (exclude DC and large low-freq harmonics)
-        pos_viz = self.frequencies_viz > 0.05
+        # Top graph: subsampled, ω > 0.1 (exclude DC and large low-freq harmonics)
+        pos_viz = self.frequencies_viz > 0.1
         freq_viz = self.frequencies_viz[pos_viz]
         mag_viz  = np.sqrt(self.spectrum_viz_real[pos_viz]**2 + self.spectrum_viz_imag[pos_viz]**2)
         s_viz    = (mag_viz**2) / (N * omega_max)
@@ -3773,10 +3773,19 @@ class FullSpectrumWindow(QMainWindow):
         real = spectrum_df['real'].values; imag = spectrum_df['imag'].values
         N = len(freq); omega_max = np.max(np.abs(freq)) if N > 0 else 1
         s = (real**2 + imag**2) / (N * omega_max)
-        pos = freq > 0
-        ax.plot(freq[pos], s[pos], linewidth=0.8, color='#e74c3c')
+        if log_scale:
+            # Full spectrum, skip DC (zero harmonic) and the first harmonic
+            # which is usually orders of magnitude larger and squashes the rest
+            f_min = freq[freq > 0].min() if np.any(freq > 0) else 0
+            mask = freq > f_min
+            title_suffix = "full, log scale, DC removed"
+        else:
+            # Linear scale — overview, exclude low-freq noise (same as top graph in Step 3)
+            mask = freq > 0.05
+            title_suffix = "ω > 0.05, linear scale"
+        ax.plot(freq[mask], s[mask], linewidth=0.8, color='#e74c3c')
         ax.set_xlabel('ω, [rad/s]', fontsize=12); ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
-        ax.set_title(f'Full Spectrum — {pos.sum():,} points', fontsize=14, fontweight='bold')
+        ax.set_title(f'Full Spectrum — {mask.sum():,} points — {title_suffix}', fontsize=14, fontweight='bold')
         if log_scale:
             ax.set_yscale('log')
         ax.grid(True, alpha=0.3, which='both')
