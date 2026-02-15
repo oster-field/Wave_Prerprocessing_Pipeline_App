@@ -4024,75 +4024,27 @@ class PipelineCompleteWindow(QDialog):
     # ── Actions ──────────────────────────────────────────────────────────────
 
     def on_exit_with_rename(self):
-        """Exit application and rename Output folder with date range"""
+        """Exit application and rename Output folder with current timestamp"""
         try:
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            output_folder = script_dir / "Output"
-            info_file = script_dir / "INFO.dat"
+            output_folder = self.output_folder
 
-            # Check if Output folder exists
-            if not output_folder.exists():
-                QApplication.quit()
-                return
-
-            # Try to read dates from INFO.dat
-            date_start = None
-            date_end = None
-
-            if info_file.exists():
-                try:
-                    # Read INFO.dat with different encodings
-                    content = None
-                    for encoding in ['utf-8', 'windows-1251', 'cp1251', 'latin-1']:
-                        try:
-                            with open(info_file, 'r', encoding=encoding, errors='ignore') as f:
-                                content = f.read()
-                            break
-                        except Exception:
-                            continue
-
-                    if content:
-                        # Extract dates using regex
-                        import re
-                        dt_pattern = re.compile(r'(\d{4}\.\d{2}\.\d{2})\s+\d{2}:\d{2}:\d{2}')
-                        dates = dt_pattern.findall(content)
-
-                        if len(dates) >= 2:
-                            date_start = dates[0].replace('.', '-')  # 2014.11.23 → 2014-11-23
-                            date_end = dates[1].replace('.', '-')
-                        elif len(dates) == 1:
-                            date_start = dates[0].replace('.', '-')
-                            date_end = date_start
-                except Exception:
-                    pass
-
-            # Rename folder if dates found
-            if date_start and date_end:
-                new_name = f"Output_{date_start}_{date_end}"
-                new_path = script_dir / new_name
-
-                # Avoid name collision
-                counter = 1
-                while new_path.exists():
-                    new_name = f"Output_{date_start}_{date_end}_{counter}"
-                    new_path = script_dir / new_name
-                    counter += 1
+            if output_folder.exists():
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                new_name = f"Output_{timestamp}"
+                new_path = output_folder.parent / new_name
 
                 # Rename
                 output_folder.rename(new_path)
 
-                # Show confirmation
                 QMessageBox.information(
                     self,
                     "Folder Renamed",
                     f"Output folder renamed to:\n{new_name}"
                 )
-
         except Exception as e:
-            # If rename fails, just quit without error message
-            print(f"Could not rename Output folder: {e}")
+            print(f"Could not rename: {e}")
 
-        # Close application
         QApplication.quit()
 
     def _clear_cache(self):
@@ -4187,26 +4139,66 @@ class PipelineCompleteWindow(QDialog):
                     df.to_csv(out, sep='\t', index=False)
                     exported.append(out.name)
 
+
+
+
                 elif chosen == "mat":
+
                     from scipy.io import savemat
+
                     out = dest_dir / f"{stem}.mat"
+
                     mat_dict = {}
+
                     for col in df.columns:
-                        safe = col.replace(' ', '_').replace('-', '_')
+
+                        safe = col.replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '').replace('/',
+                                                                                                                 '_')
+
                         vals = df[col].values
-                        # savemat cannot handle object arrays (e.g. timestamp strings)
-                        # → convert to float seconds-since-epoch, or skip if unparseable
-                        if vals.dtype == object or str(vals.dtype).startswith('<U'):
+
+                        if col == 'timestamp':
+
                             try:
-                                # Try to convert timestamps to float (unix seconds)
-                                vals = pd.to_datetime(vals, errors='coerce').astype('int64') / 1e9
-                                vals = vals.astype(float)
-                                safe = safe + '_unixtime'
+
+                                ts = pd.to_datetime(vals, errors='coerce')
+
+                                epoch = pd.Timestamp('0000-01-01')
+
+                                days_since_epoch = (ts - epoch).dt.total_seconds() / 86400.0
+
+                                mat_dict['timestamp'] = days_since_epoch.values.astype(float)
+
                             except Exception:
-                                continue  # skip unconvertible string columns
-                        mat_dict[safe] = vals
-                    savemat(str(out), mat_dict)
-                    exported.append(out.name)
+
+                                continue
+
+                            continue
+
+                        if vals.dtype == object or str(vals.dtype).startswith('<U'):
+
+                            try:
+
+                                vals = pd.to_numeric(vals, errors='coerce')
+
+                                if np.all(np.isnan(vals)):
+                                    continue
+
+                            except Exception:
+
+                                continue
+
+                        mat_dict[safe] = vals.astype(float)
+
+                    if mat_dict:
+
+                        savemat(str(out), mat_dict, do_compression=True)
+
+                        exported.append(out.name)
+
+                    else:
+
+                        errors.append(f"{fname}: No numeric data")
 
             except Exception as e:
                 errors.append(f"{fname}: {e}")
