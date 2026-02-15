@@ -1,8 +1,3 @@
-"""
-Sakhalin Wave Processor - Новый интерфейс
-Простое окно для загрузки файлов с drag & drop
-"""
-
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
@@ -89,7 +84,7 @@ class ProcessingThread(QThread):
             # Step 2: Read all data files at once
             self.progress.emit(10, f"Loading {len(self.data_files)} files...")
 
-            all_pressure_data = []
+            all_surface_displacement_data = []
 
             for i, file_path in enumerate(self.data_files):
                 if self.should_stop:
@@ -97,7 +92,7 @@ class ProcessingThread(QThread):
 
                 # Read data from file
                 data = self.read_data_file(file_path)
-                all_pressure_data.append(data)
+                all_surface_displacement_data.append(data)
 
                 # Update progress
                 progress_pct = 10 + int((i + 1) / len(self.data_files) * 30)
@@ -108,7 +103,7 @@ class ProcessingThread(QThread):
 
             # Step 4: Concatenate all data into single array (fast!)
             self.progress.emit(45, "Combining data...")
-            all_data = np.concatenate(all_pressure_data)
+            all_data = np.concatenate(all_surface_displacement_data)
 
             # Step 4: Split into 20-minute readings
             self.progress.emit(50, "Splitting into 20-min readings...")
@@ -140,7 +135,7 @@ class ProcessingThread(QThread):
             self.progress.emit(85, "Creating DataFrame...")
             final_df = pd.DataFrame({
                 'timestamp': timestamps,
-                'pressure': all_data,
+                'surface_displacement': all_data,
                 'reading_number': reading_numbers
             })
 
@@ -442,7 +437,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         """Инициализация интерфейса"""
-        self.setWindowTitle("🌊 Sakhalin Wave Processor")
+        self.setWindowTitle("🌊 Wave data preprocessing pipeline")
 
         # Central widget
         central_widget = QWidget()
@@ -450,7 +445,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
 
         # Header
-        header = QLabel("🌊 Sakhalin Wave Data Processor")
+        header = QLabel("🌊 Wave data preprocessing pipeline")
         header.setFont(QFont("Arial", 20, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("color: #2c3e50; padding: 20px;")
@@ -471,7 +466,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(data_group)
 
         # Continue button
-        self.btn_continue = QPushButton("▶️ Continue to Processing")
+        self.btn_continue = QPushButton("▶️ Continue to step 1 - plot raw data")
         self.btn_continue.setEnabled(False)
         self.btn_continue.setStyleSheet("""
             QPushButton {
@@ -831,10 +826,6 @@ class MainWindow(QMainWindow):
                 f"  • Total readings (20-min): {result_df['reading_number'].max()}\n"
                 f"  • Sensor frequency: {result_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz\n"
                 f"  • Recording period: {result_df.attrs.get('recording_start')} to {result_df.attrs.get('recording_end')}\n\n"
-                f"💾 Saved to:\n"
-                f"  {output_file}\n"
-                f"  {viz_cache_file} (visualization cache)\n\n"
-                f"Next: Visualization"
             )
 
             # Store result for visualization - use subsampled data
@@ -957,7 +948,7 @@ class VisualizationWindow(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        self.btn_skip = QPushButton("⏭️ Continue without Manual Removal")
+        self.btn_skip = QPushButton("Continue WITHOUT manual removal")
         self.btn_skip.setStyleSheet("""
             QPushButton {
                 background-color: #e74c3c;
@@ -974,7 +965,7 @@ class VisualizationWindow(QMainWindow):
         self.btn_skip.clicked.connect(self.on_skip_removal)
         btn_layout.addWidget(self.btn_skip)
 
-        self.btn_manual = QPushButton("✏️ Proceed with Manual Data Removal")
+        self.btn_manual = QPushButton("Continue WITH manual data removal")
         self.btn_manual.setStyleSheet("""
             QPushButton {
                 background-color: #27ae60;
@@ -1027,14 +1018,14 @@ class VisualizationWindow(QMainWindow):
             data_to_plot = data_to_plot.iloc[::step].reset_index(drop=True)
 
         # Detect dives
-        dive_mask = self.detect_dives(data_to_plot['pressure'].values)
+        dive_mask = self.detect_dives(data_to_plot['surface_displacement'].values)
 
         # Convert timestamps
         timestamps = pd.to_datetime(data_to_plot['timestamp'], errors='coerce')
-        pressure = data_to_plot['pressure'].values
+        surface_displacement = data_to_plot['surface_displacement'].values
 
         # FIRST: Draw complete blue line (no gaps)
-        ax.plot(timestamps, pressure,
+        ax.plot(timestamps, surface_displacement,
                linewidth=0.5, color='#3498db', alpha=0.7, label='Wave data', zorder=1)
 
         # SECOND: Overlay red segments on top (no connecting lines between segments)
@@ -1057,12 +1048,12 @@ class VisualizationWindow(QMainWindow):
             # Plot each segment separately (prevents connecting lines)
             for i, (start, end) in enumerate(segments):
                 label = 'Sensor deployment/retrieval' if i == 0 else None
-                ax.plot(timestamps[start:end+1], pressure[start:end+1],
+                ax.plot(timestamps[start:end+1], surface_displacement[start:end+1],
                        linewidth=1.0, color='#e74c3c', alpha=0.9, label=label, zorder=2)
 
         ax.set_xlabel('Date', fontsize=12)
-        ax.set_ylabel('Pressure', fontsize=12)
-        ax.set_title(f'Raw Wave Data - {len(self.data_df):,} total points ({len(data_to_plot):,} displayed at {screen_width}px)',
+        ax.set_ylabel('Surface displacement (meters)', fontsize=12)
+        ax.set_title(f'Raw Data - sensor deployment and/or retrieval will be automatically detected',
                     fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
         ax.legend(loc='upper right')
@@ -1077,7 +1068,7 @@ class VisualizationWindow(QMainWindow):
 
         return canvas
 
-    def detect_dives(self, pressure, sensitivity=3.0):
+    def detect_dives(self, surface_displacement, sensitivity=3.0):
         """
         Dive detector based on gradient analysis.
 
@@ -1089,8 +1080,8 @@ class VisualizationWindow(QMainWindow):
         2. BEGINNING LEG — search in first 40% of data:
            Find ALL positive gradient spikes where:
              - gradient > sensitivity * grad_std  (significant spike)
-             - pressure BEFORE spike < 2.0        (coming from air/shallow)
-             - pressure AFTER  spike >= 2.0       (arrived at depth)
+             - surface displacement BEFORE spike < 2.0        (coming from air/shallow)
+             - surface displacement AFTER  spike >= 2.0       (arrived at depth)
            These are true water-entry events. The leg ends after the
            LAST such spike (sensor may re-surface several times before
            settling at deployment depth).
@@ -1099,35 +1090,35 @@ class VisualizationWindow(QMainWindow):
         3. ENDING LEG — search in last 40% of data:
            Find ALL negative gradient spikes where:
              - gradient < -sensitivity * grad_std (significant drop)
-             - pressure BEFORE spike >= 2.0       (was at depth)
-             - pressure AFTER  spike < 2.0        (left the water)
+             - surface displacement BEFORE spike >= 2.0       (was at depth)
+             - surface displacement AFTER  spike < 2.0        (left the water)
            The leg starts at the FIRST such spike.
            Mark [first_drop_start : n] as dive leg.
 
         Returns:
             Boolean mask where True = dive/retrieval section to remove.
         """
-        n = len(pressure)
+        n = len(surface_displacement)
         dive_mask = np.zeros(n, dtype=bool)
 
         if n < 100:
             return dive_mask
 
-        gradient     = np.gradient(pressure)
+        gradient     = np.gradient(surface_displacement)
         gradient_abs = np.abs(gradient)
         grad_std     = np.std(gradient)
         threshold    = sensitivity * grad_std
 
         # ── BEGINNING LEG ──────────────────────────────────────────────────
-        if pressure[0] < 2.0:
+        if surface_displacement[0] < 2.0:
             search_end = min(int(n * 0.4), 4000)
 
             # True dive entry: large positive gradient AND crosses the 2.0 boundary
             jump_indices = []
             for i in range(1, search_end):
                 if gradient[i] > threshold:
-                    p_before = pressure[i - 1]
-                    p_after  = pressure[min(i + 1, n - 1)]
+                    p_before = surface_displacement[i - 1]
+                    p_after  = surface_displacement[min(i + 1, n - 1)]
                     # Must be a genuine air→water crossing
                     if p_before < 2.0 and p_after >= 2.0:
                         jump_indices.append(i)
@@ -1148,15 +1139,15 @@ class VisualizationWindow(QMainWindow):
                 dive_mask[0:leg_end] = True
 
         # ── ENDING LEG ─────────────────────────────────────────────────────
-        if pressure[-1] < 2.0:
+        if surface_displacement[-1] < 2.0:
             search_start = max(int(n * 0.6), n - 4000)
 
             # True retrieval exit: large negative gradient AND crosses 2.0 boundary
             drop_indices = []
             for i in range(search_start + 1, n):
                 if gradient[i] < -threshold:
-                    p_before = pressure[i - 1]
-                    p_after  = pressure[min(i + 1, n - 1)]
+                    p_before = surface_displacement[i - 1]
+                    p_after  = surface_displacement[min(i + 1, n - 1)]
                     # Must be a genuine water→air crossing
                     if p_before >= 2.0 and p_after < 2.0:
                         drop_indices.append(i)
@@ -1265,14 +1256,14 @@ class VisualizationWindow(QMainWindow):
         status.setText("Calculating global average (Avg_Depth_FullRec)...")
         QApplication.processEvents()
 
-        avg_depth_full_rec = data['pressure'].mean()
+        avg_depth_full_rec = data['surface_displacement'].mean()
 
         # Calculate average for each reading
         progress_bar.setValue(88)
         status.setText("Calculating averages for each 20-min reading...")
         QApplication.processEvents()
 
-        reading_averages = data.groupby('reading_number')['pressure'].mean().reset_index()
+        reading_averages = data.groupby('reading_number')['surface_displacement'].mean().reset_index()
         reading_averages.columns = ['reading_number', 'average_depth']
 
         # Create Zero Mean data
@@ -1281,7 +1272,7 @@ class VisualizationWindow(QMainWindow):
         QApplication.processEvents()
 
         zero_mean_data = data.copy()
-        zero_mean_data['pressure'] = zero_mean_data['pressure'] - avg_depth_full_rec
+        zero_mean_data['surface_displacement'] = zero_mean_data['surface_displacement'] - avg_depth_full_rec
 
         # Save Zero Mean file
         progress_bar.setValue(95)
@@ -1294,7 +1285,7 @@ class VisualizationWindow(QMainWindow):
             f.write("# ==========================================\n")
             f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
             f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
-            f.write(f"# All pressure values have this subtracted\n")
+            f.write(f"# All surface_displacement values have this subtracted\n")
             f.write("# ==========================================\n")
 
         zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
@@ -1430,7 +1421,7 @@ class ManualRemovalWindow(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        btn_save = QPushButton("💾 Save Trimmed Data")
+        btn_save = QPushButton("💾 Continue with trimmed data")
         btn_save.setStyleSheet("""
             QPushButton {
                 background-color: #27ae60;
@@ -1453,10 +1444,10 @@ class ManualRemovalWindow(QMainWindow):
 
     def detect_dive_legs(self):
         """Detect dive legs on visualization (subsampled) data"""
-        pressure_viz = self.viz_data_df['pressure'].values
+        surface_displacement_viz = self.viz_data_df['surface_displacement'].values
 
         # Detect dives (same algorithm as VisualizationWindow)
-        dive_mask = self.detect_dives(pressure_viz)
+        dive_mask = self.detect_dives(surface_displacement_viz)
 
         # Find beginning and ending legs
         dive_indices = np.where(dive_mask)[0]
@@ -1473,12 +1464,12 @@ class ManualRemovalWindow(QMainWindow):
 
             if len(breaks) == 0:
                 # Only one segment
-                if dive_indices[0] < len(pressure_viz) // 2:
+                if dive_indices[0] < len(surface_displacement_viz) // 2:
                     # Beginning
                     self.beginning_viz_range = (0, dive_indices[-1])
                 else:
                     # Ending
-                    self.ending_viz_range = (dive_indices[0], len(pressure_viz) - 1)
+                    self.ending_viz_range = (dive_indices[0], len(surface_displacement_viz) - 1)
             else:
                 # Two segments
                 # Beginning segment
@@ -1487,13 +1478,13 @@ class ManualRemovalWindow(QMainWindow):
 
                 # Ending segment
                 end_start = dive_indices[breaks[0] + 1]
-                self.ending_viz_range = (end_start, len(pressure_viz) - 1)
+                self.ending_viz_range = (end_start, len(surface_displacement_viz) - 1)
 
             # Add +10% safety margin
             if self.beginning_viz_range:
                 start, end = self.beginning_viz_range
                 margin = int((end - start) * 0.1)
-                end = min(end + margin, len(pressure_viz) - 1)
+                end = min(end + margin, len(surface_displacement_viz) - 1)
                 self.beginning_viz_range = (start, end)
                 self.beginning_data = self.viz_data_df.iloc[start:end+1].copy()
 
@@ -1504,7 +1495,7 @@ class ManualRemovalWindow(QMainWindow):
                 self.ending_viz_range = (start, end)
                 self.ending_data = self.viz_data_df.iloc[start:end+1].copy()
 
-    def detect_dives(self, pressure, sensitivity=3.0):
+    def detect_dives(self, surface_displacement, sensitivity=3.0):
         """
         Dive detector — identical to VisualizationWindow.detect_dives.
 
@@ -1514,29 +1505,29 @@ class ManualRemovalWindow(QMainWindow):
         ENDING LEG: search last 40%, find ALL negative gradient spikes
         crossing 2.0 m boundary (water→air). Mark [first_drop_start:n].
 
-        Guards: if pressure[0] >= 2.0 → no beginning leg;
-                if pressure[-1] >= 2.0 → no ending leg.
+        Guards: if surface_displacement[0] >= 2.0 → no beginning leg;
+                if surface_displacement[-1] >= 2.0 → no ending leg.
         """
-        n = len(pressure)
+        n = len(surface_displacement)
         dive_mask = np.zeros(n, dtype=bool)
 
         if n < 100:
             return dive_mask
 
-        gradient     = np.gradient(pressure)
+        gradient     = np.gradient(surface_displacement)
         gradient_abs = np.abs(gradient)
         grad_std     = np.std(gradient)
         threshold    = sensitivity * grad_std
 
         # ── BEGINNING LEG ──────────────────────────────────────────────────
-        if pressure[0] < 2.0:
+        if surface_displacement[0] < 2.0:
             search_end = min(int(n * 0.4), 4000)
 
             jump_indices = []
             for i in range(1, search_end):
                 if gradient[i] > threshold:
-                    p_before = pressure[i - 1]
-                    p_after  = pressure[min(i + 1, n - 1)]
+                    p_before = surface_displacement[i - 1]
+                    p_after  = surface_displacement[min(i + 1, n - 1)]
                     if p_before < 2.0 and p_after >= 2.0:
                         jump_indices.append(i)
 
@@ -1553,14 +1544,14 @@ class ManualRemovalWindow(QMainWindow):
                 dive_mask[0:leg_end] = True
 
         # ── ENDING LEG ─────────────────────────────────────────────────────
-        if pressure[-1] < 2.0:
+        if surface_displacement[-1] < 2.0:
             search_start = max(int(n * 0.6), n - 4000)
 
             drop_indices = []
             for i in range(search_start + 1, n):
                 if gradient[i] < -threshold:
-                    p_before = pressure[i - 1]
-                    p_after  = pressure[min(i + 1, n - 1)]
+                    p_before = surface_displacement[i - 1]
+                    p_after  = surface_displacement[min(i + 1, n - 1)]
                     if p_before >= 2.0 and p_after < 2.0:
                         drop_indices.append(i)
 
@@ -1590,22 +1581,22 @@ class ManualRemovalWindow(QMainWindow):
 
         # Plot FULL viz data
         full_timestamps = self.viz_data_df['timestamp']
-        full_pressure = self.viz_data_df['pressure'].values
+        full_surface_displacement = self.viz_data_df['surface_displacement'].values
 
         # Plot complete data
-        ax.plot(full_timestamps, full_pressure, linewidth=0.5, color='#3498db', alpha=0.7)
+        ax.plot(full_timestamps, full_surface_displacement, linewidth=0.5, color='#3498db', alpha=0.7)
 
         # Highlight the detected dive section in red
         if leg_type == 'beginning' and self.beginning_viz_range:
             start, end = self.beginning_viz_range
             dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
-            dive_pressure = full_pressure[start:end+1]
-            ax.plot(dive_timestamps, dive_pressure, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
+            dive_surface_displacement = full_surface_displacement[start:end+1]
+            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
         elif leg_type == 'ending' and self.ending_viz_range:
             start, end = self.ending_viz_range
             dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
-            dive_pressure = full_pressure[start:end+1]
-            ax.plot(dive_timestamps, dive_pressure, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
+            dive_surface_displacement = full_surface_displacement[start:end+1]
+            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
 
         # No axis labels, only tick values
         ax.set_title(title, fontsize=12, fontweight='bold')
@@ -1850,7 +1841,7 @@ class ManualRemovalWindow(QMainWindow):
     def process_zero_mean(self, step2_file, output_folder, progress_bar, status):
         """
         Process Zero Mean:
-        1. Calculate Avg_Depth_FullRec (mean of all pressure values)
+        1. Calculate Avg_Depth_FullRec (mean of all surface displacement values)
         2. Create Step2_Zero_Mean.csv (all values - Avg_Depth_FullRec)
         3. Create Parameters.csv with reading means and metadata
         """
@@ -1865,14 +1856,14 @@ class ManualRemovalWindow(QMainWindow):
         status.setText("Calculating global average (Avg_Depth_FullRec)...")
         QApplication.processEvents()
 
-        avg_depth_full_rec = data['pressure'].mean()
+        avg_depth_full_rec = data['surface_displacement'].mean()
 
         # Step 2: Calculate average for each reading
         progress_bar.setValue(88)
         status.setText("Calculating averages for each 20-min reading...")
         QApplication.processEvents()
 
-        reading_averages = data.groupby('reading_number')['pressure'].mean().reset_index()
+        reading_averages = data.groupby('reading_number')['surface_displacement'].mean().reset_index()
         reading_averages.columns = ['reading_number', 'average_depth']
 
         # Step 4: Create Zero Mean data (subtract global average from all points)
@@ -1881,7 +1872,7 @@ class ManualRemovalWindow(QMainWindow):
         QApplication.processEvents()
 
         zero_mean_data = data.copy()
-        zero_mean_data['pressure'] = zero_mean_data['pressure'] - avg_depth_full_rec
+        zero_mean_data['surface_displacement'] = zero_mean_data['surface_displacement'] - avg_depth_full_rec
 
         # Step 4: Save Zero Mean file
         progress_bar.setValue(95)
@@ -1894,7 +1885,7 @@ class ManualRemovalWindow(QMainWindow):
             f.write("# ==========================================\n")
             f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
             f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
-            f.write(f"# All pressure values have this subtracted\n")
+            f.write(f"# All surface_displacement values have this subtracted\n")
             f.write("# ==========================================\n")
 
         zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
@@ -2205,7 +2196,7 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             data = pd.read_csv(step2_file, comment='#')
-            y = data['pressure'].values
+            y = data['surface_displacement'].values
 
             # Read sensor frequency from Step2 metadata header
             sensor_freq = read_sensor_freq_from_csv(step2_file)
@@ -2338,8 +2329,8 @@ class Step3FourierWindow(QMainWindow):
 
         fig_top.tight_layout()
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
-        full_time_action = QAction('📊 Build all data points (slow)', self)
-        full_time_action.triggered.connect(self.build_full_data_step3_time)
+        full_time_action = QAction('📊 Build full spectrum (slow)', self)
+        full_time_action.triggered.connect(self.build_full_spectrum_linear)
         toolbar_top.addAction(full_time_action)
 
         # ==============================================================================
@@ -2510,7 +2501,7 @@ class Step3FourierWindow(QMainWindow):
 
             # Create transformed dataframe
             data_transformed = data_orig.copy()
-            data_transformed['pressure'] = y_transformed
+            data_transformed['surface_displacement'] = y_transformed
 
             progress_bar.setValue(65)
             status.setText("Removing edge readings...")
@@ -2534,6 +2525,7 @@ class Step3FourierWindow(QMainWindow):
             with open(step3_file, 'w', encoding='utf-8') as f:
                 f.write("# STEP 3: Transformed Data - Low frequencies removed\n")
                 f.write("# ==========================================\n")
+                f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
                 f.write(f"# Cutoff frequency: {self.cutoff_freq:.6f} rad/s\n")
                 f.write(f"# Original readings: {len(reading_numbers)}\n")
                 f.write(f"# Readings after edge removal: {len(readings_to_keep) if len(reading_numbers) > 4 else len(reading_numbers)}\n")
@@ -2626,7 +2618,7 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             data = pd.read_csv(step2_file, comment='#')
-            y = data['pressure'].values
+            y = data['surface_displacement'].values
 
             # Parameters from UI spinboxes
             WindowSize = self.spin_window.value()   # минут
@@ -2801,11 +2793,11 @@ class Step3FourierWindow(QMainWindow):
         ax = fig.add_subplot(111)
 
         # Plot before (orange, more transparent per your request)
-        ax.plot(data_before['timestamp'], data_before['pressure'],
+        ax.plot(data_before['timestamp'], data_before['surface_displacement'],
                linewidth=0.5, color='#FFA500', alpha=0.6, label='Before', zorder=1)
 
         # Plot after (blue, less transparent per your request)
-        ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['pressure'],
+        ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['surface_displacement'],
                linewidth=0.5, color='#3498db', alpha=0.7, label='After', zorder=2)
 
         # Horizontal line at y=0 (on top)
@@ -2868,22 +2860,21 @@ class Step3FourierWindow(QMainWindow):
 
         comparison_window.exec_()
 
-    def build_full_data_step3_time(self):
-        """Load and plot full Step3 transformed time-domain data"""
-        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
+    def build_full_spectrum_linear(self):
+        """Load and plot full spectrum in linear scale (top graph button)"""
+        progress = QDialog(self); progress.setWindowTitle('Loading Full Spectrum')
         progress.setModal(True); progress.setFixedSize(400, 100)
-        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Transformed.csv...'))
+        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Spectrum.csv...'))
         pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
         progress.show(); QApplication.processEvents()
         try:
             script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            df = pd.read_csv(script_dir / 'Output' / 'Step3_Transformed.csv', comment='#')
-            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+            df = pd.read_csv(script_dir / 'Output' / 'Step3_Spectrum.csv', comment='#')
             progress.close()
-            _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
-            QApplication.instance()._full_window = _w; _w.show()
+            _w = FullSpectrumWindow(df, log_scale=False)
+            QApplication.instance()._full_spectrum_linear_window = _w; _w.show()
         except Exception as e:
-            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
+            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full spectrum:\n{str(e)}')
 
     def build_full_spectrum(self):
         """Load and plot full spectrum data"""
@@ -3128,9 +3119,9 @@ class Step4ProcessingWindow(QMainWindow):
 
         # Plot data
         timestamps = data['timestamp']
-        pressure = data['pressure'].values
+        surface_displacement = data['surface_displacement'].values
 
-        ax.plot(timestamps, pressure, linewidth=0.5, color='#3498db', alpha=0.7)
+        ax.plot(timestamps, surface_displacement, linewidth=0.5, color='#3498db', alpha=0.7)
 
         # Add horizontal line at y=0 (thick black)
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
@@ -3424,7 +3415,7 @@ class Step4ProcessingWindow(QMainWindow):
 
             for reading_num, reading_data in grouped:
                 reading_arrays[reading_num] = {
-                    'pressure': reading_data['pressure'].values,
+                    'surface_displacement': reading_data['surface_displacement'].values,
                     'indices': reading_data.index.values,
                     'timestamps': reading_data['timestamp'].values,
                     'start': reading_data['timestamp'].iloc[0],
@@ -3457,7 +3448,7 @@ class Step4ProcessingWindow(QMainWindow):
                     QApplication.processEvents()
 
                 arr_data = reading_arrays[reading_num]
-                arr = arr_data['pressure'].copy()  # ВАЖНО: .copy() для возможности модификации!
+                arr = arr_data['surface_displacement'].copy()  # ВАЖНО: .copy() для возможности модификации!
                 arr_indices = arr_data['indices']
                 arr_timestamps = arr_data['timestamps']
                 reading_start = arr_data['start']
@@ -3509,7 +3500,7 @@ class Step4ProcessingWindow(QMainWindow):
                             else:
                                 new_value = arr[j]
 
-                            data.loc[spike_idx, 'pressure'] = new_value
+                            data.loc[spike_idx, 'surface_displacement'] = new_value
                             arr[j + 1] = new_value
 
                 # ========== STEP 3: CALCULATE ALL WAVE PARAMETERS ==========
@@ -3752,8 +3743,8 @@ class FullDataWindow(QMainWindow):
         layout.addWidget(info)
         fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
-        ax.plot(data_df['timestamp'], data_df['pressure'].values, linewidth=0.5, color='#3498db', alpha=0.8)
-        ax.set_xlabel('Date', fontsize=12); ax.set_ylabel('Pressure', fontsize=12)
+        ax.plot(data_df['timestamp'], data_df['surface_displacement'].values, linewidth=0.5, color='#3498db', alpha=0.8)
+        ax.set_xlabel('Date', fontsize=12); ax.set_ylabel('Surface displacement (meters)', fontsize=12)
         ax.set_title(f'{title} — {len(data_df):,} points', fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
         import matplotlib.dates as mdates
@@ -3767,7 +3758,7 @@ class FullDataWindow(QMainWindow):
 
 
 class FullSpectrumWindow(QMainWindow):
-    def __init__(self, spectrum_df):
+    def __init__(self, spectrum_df, log_scale=True):
         super().__init__()
         self.setWindowTitle("Full Spectrum")
         self.setGeometry(100, 100, 1400, 700)
@@ -3786,7 +3777,10 @@ class FullSpectrumWindow(QMainWindow):
         ax.plot(freq[pos], s[pos], linewidth=0.8, color='#e74c3c')
         ax.set_xlabel('ω, [rad/s]', fontsize=12); ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
         ax.set_title(f'Full Spectrum — {pos.sum():,} points', fontsize=14, fontweight='bold')
-        ax.set_yscale('log'); ax.grid(True, alpha=0.3, which='both'); fig.tight_layout()
+        if log_scale:
+            ax.set_yscale('log')
+        ax.grid(True, alpha=0.3, which='both')
+        fig.tight_layout()
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         toolbar = NavigationToolbar2QT(canvas, self)
         layout.addWidget(toolbar); layout.addWidget(canvas)
@@ -3857,7 +3851,7 @@ class PipelineCompleteWindow(QDialog):
         kept_lbl = QLabel(
             "<b>Output files:</b><br>"
             "• <tt>Parameters.csv</tt> — wave parameters for all readings<br>"
-            "• <tt>Step4_Filtered.csv</tt> — filtered pressure time-series"
+            "• <tt>Step4_Filtered.csv</tt> — filtered surface_displacement time-series"
         )
         kept_lbl.setTextFormat(Qt.RichText)
         kept_lbl.setStyleSheet("font-size:12px; color:#555; padding: 4px 0;")
