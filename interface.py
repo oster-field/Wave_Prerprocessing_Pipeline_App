@@ -912,7 +912,8 @@ class VisualizationWindow(QMainWindow):
     def init_ui(self):
         """Initialize visualization window"""
         self.setWindowTitle("🌊 Wave Data Visualization")
-        self.showMaximized()  # Fullscreen
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, self.showMaximized)  # defer until event loop is running
 
         # Central widget
         central_widget = QWidget()
@@ -965,7 +966,7 @@ class VisualizationWindow(QMainWindow):
         self.btn_skip.clicked.connect(self.on_skip_removal)
         btn_layout.addWidget(self.btn_skip)
 
-        self.btn_manual = QPushButton("Continue WITH manual data removal")
+        self.btn_manual = QPushButton("✏️ Proceed with Manual Data Removal")
         self.btn_manual.setStyleSheet("""
             QPushButton {
                 background-color: #27ae60;
@@ -978,9 +979,16 @@ class VisualizationWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #229954;
             }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+                color: #ecf0f1;
+            }
         """)
         self.btn_manual.clicked.connect(self.on_manual_removal)
         btn_layout.addWidget(self.btn_manual)
+
+        # Disable manual removal button if dive detector found nothing
+        self._update_manual_btn_state()
 
         layout.addLayout(btn_layout)
 
@@ -1169,6 +1177,20 @@ class VisualizationWindow(QMainWindow):
 
         return dive_mask
 
+
+    def _update_manual_btn_state(self):
+        """Enable btn_manual only if dive detector found at least one leg."""
+        # Re-run detection on viz data to check result
+        surface_displacement_viz = self.data_df.iloc[
+            ::max(1, len(self.data_df) // 10000)
+        ]['surface_displacement'].values
+        dive_mask = self.detect_dives(surface_displacement_viz)
+        has_dives = dive_mask.sum() > 0
+        self.btn_manual.setEnabled(has_dives)
+        if not has_dives:
+            self.btn_manual.setToolTip(
+                "Dive detector found no deployment/retrieval legs in this dataset."
+            )
 
     def on_manual_removal(self):
         """Handle manual removal button click"""
@@ -1364,8 +1386,9 @@ class ManualRemovalWindow(QMainWindow):
         """Initialize manual removal window"""
         self.setWindowTitle("🌊 Manual Dive Removal")
 
-        # Open maximized (not fullscreen, but maximized window)
-        self.showMaximized()
+        # Open maximized — deferred so it works both from checkpoint and normal flow
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, self.showMaximized)
 
         # Central widget
         central_widget = QWidget()
@@ -1694,7 +1717,71 @@ class ManualRemovalWindow(QMainWindow):
         # Add navigation toolbar for zoom/pan
         toolbar = NavigationToolbar2QT(canvas, self)
         full_data_action = QAction('📊 Build all data points (slow)', self)
-        full_data_action.triggered.connect(self.build_full_data_step2)
+
+        # Capture ax/canvas/fig/leg_type in closure — redraws THIS graph in place
+        def _build_full_in_place(checked=False, _ax=ax, _canvas=canvas, _fig=fig, _lt=leg_type):
+            import matplotlib.dates as _mdates
+            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+            full_file = script_dir / 'Output' / 'Step1_TXTtoCSV.csv'
+            if not full_file.exists():
+                QMessageBox.warning(self, 'Not found', f'Could not find:\n{full_file}')
+                return
+            # Progress cursor
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            QApplication.processEvents()
+            try:
+                df_full = pd.read_csv(full_file, comment='#')
+                df_full['timestamp'] = pd.to_datetime(df_full['timestamp'], errors='coerce')
+                ts  = df_full['timestamp']
+                prs = df_full['surface_displacement'].values
+
+                # Remember current xlim so zoom is preserved
+                cur_xlim = _ax.get_xlim()
+
+                # Clear only data lines (keep cut line / shading drawn by user)
+                # Lines added by this function are tagged with gid='full_data'
+                for line in list(_ax.lines):
+                    if line.get_gid() in ('viz_line', 'dive_highlight', 'full_data'):
+                        line.remove()
+                for coll in list(_ax.collections):
+                    if getattr(coll, '_full_data_replace', False):
+                        coll.remove()
+
+                # Draw full data
+                l, = _ax.plot(ts, prs, linewidth=0.3, color='#3498db', alpha=0.8)
+                l.set_gid('full_data')
+
+                # Re-draw dive highlight
+                if _lt == 'beginning' and self.beginning_viz_range:
+                    s, e = self.beginning_viz_range
+                    # Map viz indices to full-data timestamps
+                    viz_ts = self.viz_data_df['timestamp']
+                    t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
+                    mask = (ts >= t0) & (ts <= t1)
+                    hl, = _ax.plot(ts[mask], prs[mask], linewidth=0.6,
+                                   color='#e74c3c', alpha=0.9, label='Detected dive')
+                    hl.set_gid('full_data')
+                elif _lt == 'ending' and self.ending_viz_range:
+                    s, e = self.ending_viz_range
+                    viz_ts = self.viz_data_df['timestamp']
+                    t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
+                    mask = (ts >= t0) & (ts <= t1)
+                    hl, = _ax.plot(ts[mask], prs[mask], linewidth=0.6,
+                                   color='#e74c3c', alpha=0.9, label='Detected dive')
+                    hl.set_gid('full_data')
+
+                _ax.set_xlim(cur_xlim)   # restore zoom
+                _ax.set_title(
+                    _ax.get_title().replace(' (subsampled)', '') + f' — {len(prs):,} pts',
+                    fontsize=12, fontweight='bold'
+                )
+                _canvas.draw()
+            except Exception as ex:
+                QMessageBox.critical(self, 'Error', f'Could not load full data:\n{ex}')
+            finally:
+                QApplication.restoreOverrideCursor()
+
+        full_data_action.triggered.connect(_build_full_in_place)
         toolbar.addAction(full_data_action)
 
         # Container widget
@@ -2158,8 +2245,9 @@ class Step3FourierWindow(QMainWindow):
 
             self.create_spectrum_plot()
 
-            # Show window maximized AFTER data is loaded
-            self.showMaximized()
+            # Show window maximized — deferred for checkpoint-start compatibility
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, self.showMaximized)
             return
 
         # Show progress dialog
@@ -2278,8 +2366,9 @@ class Step3FourierWindow(QMainWindow):
             # Create plot with its own progress
             self.create_spectrum_plot()
 
-            # Show window maximized AFTER data is loaded
-            self.showMaximized()
+            # Show window maximized — deferred for checkpoint-start compatibility
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, self.showMaximized)
 
         except Exception as e:
             progress_dialog.close()
@@ -2294,7 +2383,10 @@ class Step3FourierWindow(QMainWindow):
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         from matplotlib import ticker as mticker
 
-        # ── S(ω) = |FFT|² / (N · max(ω))  [m²/s]  ──────────────────────────
+        # ── S(ω) = 2·|FFT|² / (N · max(ω))  [m²/s]  ───────────────────────
+        # Two-sided FFT stored → take positive freqs only and multiply by 2
+        # to recover the one-sided (physical) spectral density.
+        # Factor 2 is equivalent to dividing by N/2 instead of N.
         N = len(self.spectrum_full)
         omega_max = np.max(np.abs(self.frequencies_full))
 
@@ -2302,13 +2394,13 @@ class Step3FourierWindow(QMainWindow):
         pos_viz = self.frequencies_viz > 0.1
         freq_viz = self.frequencies_viz[pos_viz]
         mag_viz  = np.sqrt(self.spectrum_viz_real[pos_viz]**2 + self.spectrum_viz_imag[pos_viz]**2)
-        s_viz    = (mag_viz**2) / (N * omega_max)
+        s_viz    = (mag_viz**2) / ((N / 2) * omega_max)
 
-        # Bottom graph: full resolution, positive, 0 < ω ≤ 0.1
+        # Bottom graph: full resolution, 0 < ω ≤ 0.1
         pos_full = self.frequencies_full >= 0
         freq_full = self.frequencies_full[pos_full]
         mag_full  = np.sqrt(self.spectrum_full.real[pos_full]**2 + self.spectrum_full.imag[pos_full]**2)
-        s_full    = (mag_full**2) / (N * omega_max)
+        s_full    = (mag_full**2) / ((N / 2) * omega_max)
         zoom_idx  = (freq_full > 0) & (freq_full <= 0.1)
         freq_zoom = freq_full[zoom_idx]
         s_zoom    = s_full[zoom_idx]
@@ -2847,13 +2939,17 @@ class Step3FourierWindow(QMainWindow):
         """)
 
         def go_to_step4():
-            comparison_window.close()
-            self.close()
-            QApplication.processEvents()   # flush close repaints before heavy init
-            # Store on QApplication — outlives self (Step3 window being destroyed)
-            win = Step4ProcessingWindow()
-            QApplication.instance()._step4_window = win
-            win.show()
+            comparison_window.close()   # ends exec_() → returns below
+            # Defer Step4 creation to AFTER exec_() fully unwinds,
+            # so the Qt event loop is clean before Step3 is destroyed.
+            from PyQt5.QtCore import QTimer
+            def _open_step4():
+                step3_ref = self   # keep Step3 alive a moment longer
+                win = Step4ProcessingWindow()
+                QApplication.instance()._step4_window = win
+                win.show()
+                step3_ref.close()
+            QTimer.singleShot(0, _open_step4)
 
         btn_continue.clicked.connect(go_to_step4)
         layout.addWidget(btn_continue)
@@ -3093,8 +3189,9 @@ class Step4ProcessingWindow(QMainWindow):
             status.setText("Rendering...")
             QApplication.processEvents()
 
-            # Show window maximized, then close the progress dialog
-            self.showMaximized()
+            # Show window maximized — deferred for checkpoint-start compatibility
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, self.showMaximized)
             QApplication.processEvents()
 
             progress_bar.setValue(100)
@@ -3771,8 +3868,9 @@ class FullSpectrumWindow(QMainWindow):
         ax = fig.add_subplot(111)
         freq = spectrum_df['frequency'].values
         real = spectrum_df['real'].values; imag = spectrum_df['imag'].values
+        # Two-sided FFT stored in CSV → one-sided PSD needs factor 2
         N = len(freq); omega_max = np.max(np.abs(freq)) if N > 0 else 1
-        s = (real**2 + imag**2) / (N * omega_max)
+        s = (real**2 + imag**2) / ((N / 2) * omega_max)
         if log_scale:
             # Full spectrum, skip DC (zero harmonic) and the first harmonic
             # which is usually orders of magnitude larger and squashes the rest
@@ -3964,10 +4062,29 @@ class PipelineCompleteWindow(QDialog):
             return
         dest_dir = Path(dest_dir)
 
+        # ── Progress dialog ──────────────────────────────────────────────────
+        prog = QDialog(self)
+        prog.setWindowTitle("Exporting…")
+        prog.setModal(True)
+        prog.setFixedSize(420, 110)
+        _pl = QVBoxLayout(prog)
+        prog_lbl = QLabel("Preparing…")
+        prog_lbl.setAlignment(Qt.AlignCenter)
+        _pl.addWidget(prog_lbl)
+        prog_bar = QProgressBar()
+        prog_bar.setRange(0, 0)   # indeterminate spinner
+        _pl.addWidget(prog_bar)
+        prog.show()
+        QApplication.processEvents()
+
         exported = []
         errors   = []
+        files = ("Step4_Filtered.csv", "Parameters.csv")
 
-        for fname in ("Step4_Filtered.csv", "Parameters.csv"):
+        for idx, fname in enumerate(files):
+            prog_lbl.setText(f"Exporting {fname}…")
+            QApplication.processEvents()
+
             src = self.output_folder / fname
             if not src.exists():
                 errors.append(f"{fname} not found"); continue
@@ -3983,16 +4100,28 @@ class PipelineCompleteWindow(QDialog):
                 elif chosen == "mat":
                     from scipy.io import savemat
                     out = dest_dir / f"{stem}.mat"
-                    # Convert to dict of numpy arrays (MATLAB-compatible names)
-                    mat_dict = {
-                        col.replace(' ', '_').replace('-', '_'): df[col].values
-                        for col in df.columns
-                    }
+                    mat_dict = {}
+                    for col in df.columns:
+                        safe = col.replace(' ', '_').replace('-', '_')
+                        vals = df[col].values
+                        # savemat cannot handle object arrays (e.g. timestamp strings)
+                        # → convert to float seconds-since-epoch, or skip if unparseable
+                        if vals.dtype == object or str(vals.dtype).startswith('<U'):
+                            try:
+                                # Try to convert timestamps to float (unix seconds)
+                                vals = pd.to_datetime(vals, errors='coerce')                                          .astype('int64') / 1e9
+                                vals = vals.to_numpy().astype(float)
+                                safe = safe + '_unixtime'
+                            except Exception:
+                                continue  # skip unconvertible string columns
+                        mat_dict[safe] = vals
                     savemat(str(out), mat_dict)
                     exported.append(out.name)
 
             except Exception as e:
                 errors.append(f"{fname}: {e}")
+
+        prog.close()
 
         msg = f"Exported {len(exported)} file(s) to:\n{dest_dir}"
         if exported:
@@ -4029,6 +4158,7 @@ def main():
 
         if reply == QMessageBox.Yes:
             step4_window = Step4ProcessingWindow()
+            app.instance()._step4_window = step4_window  # keep alive — prevent GC
             step4_window.show()
             sys.exit(app.exec_())
 
@@ -4053,6 +4183,7 @@ def main():
         if reply == QMessageBox.Yes:
             # Open Step 3 Fourier window
             step3_window = Step3FourierWindow()
+            app.instance()._step3_window = step3_window  # prevent GC
             step3_window.show()
             sys.exit(app.exec_())
 
