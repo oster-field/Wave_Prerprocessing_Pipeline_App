@@ -18,6 +18,12 @@ from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 
 # ==============================================================================
+# PATHS
+# ==============================================================================
+SCRIPT_DIR    = Path(__file__).parent
+OUTPUT_FOLDER = SCRIPT_DIR / "Output"
+
+# ==============================================================================
 # VISUALIZATION CONFIGURATION
 # ==============================================================================
 # Optimal subsampling for FullHD displays (1920×1080)
@@ -101,7 +107,7 @@ class ProcessingThread(QThread):
             if self.should_stop:
                 return
 
-            # Step 4: Concatenate all data into single array (fast!)
+            # Step 3: Concatenate all data into single array
             self.progress.emit(45, "Combining data...")
             all_data = np.concatenate(all_surface_displacement_data)
 
@@ -151,8 +157,7 @@ class ProcessingThread(QThread):
             self.progress.emit(90, "Saving to CSV file...")
 
             # Get output path - Output folder next to the script
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            output_folder = script_dir / "Output"
+            output_folder = OUTPUT_FOLDER
             output_folder.mkdir(exist_ok=True)  # Create if doesn't exist
             output_file = output_folder / "Step1_TXTtoCSV.csv"
 
@@ -262,7 +267,7 @@ class ProcessingThread(QThread):
 
 
 class FileDropZone(QLabel):
-    """Зона для перетаскивания файлов"""
+    """Drop zone widget for dragging and dropping files."""
     files_dropped = pyqtSignal(list)
 
     def __init__(self, text="", allowed_extensions=None):
@@ -297,7 +302,7 @@ class FileDropZone(QLabel):
     def dropEvent(self, event: QDropEvent):
         files = [url.toLocalFile() for url in event.mimeData().urls()]
 
-        # Фильтруем по расширениям если заданы
+        # Filter by allowed extensions if specified
         if self.allowed_extensions:
             valid_files = [f for f in files if any(f.endswith(ext) for ext in self.allowed_extensions)]
         else:
@@ -373,70 +378,16 @@ class ProgressDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    """Главное окно приложения"""
+    """Main application window — file loading and pipeline entry point."""
 
     def __init__(self):
         super().__init__()
         self.info_file = None
         self.data_files = []
-        self.check_existing_data()
-
-    def check_existing_data(self):
-        """Check if processed data already exists"""
-        # Look for Output/Step1_TXTtoCSV.csv in current directory
-        current_dir = Path.cwd()
-        output_file = current_dir / "Output" / "Step1_TXTtoCSV.csv"
-
-        if output_file.exists():
-            # Ask user if they want to continue from previous session
-            reply = QMessageBox.question(
-                None,
-                "Previous Session Found",
-                f"Found existing processed data:\n{output_file}\n\n"
-                "Do you want to continue from previous session?\n\n"
-                "Yes - Load existing data and show visualization\n"
-                "No - Start fresh (will overwrite)",
-                QMessageBox.Yes | QMessageBox.No
-            )
-
-            if reply == QMessageBox.Yes:
-                # Load existing data and go directly to visualization
-                try:
-                    df = pd.read_csv(output_file, comment='#')
-
-                    # Read metadata from file
-                    with open(output_file, 'r') as f:
-                        for line in f:
-                            if line.startswith('# Sensor frequency:'):
-                                freq = int(line.split(':')[1].strip().split()[0])
-                                df.attrs['sensor_frequency_hz'] = freq
-                            elif line.startswith('# Recording start:'):
-                                df.attrs['recording_start'] = line.split(':', 1)[1].strip()
-                            elif line.startswith('# Recording end:'):
-                                df.attrs['recording_end'] = line.split(':', 1)[1].strip()
-
-                    # Show visualization directly
-                    self.show_visualization_directly(df)
-                    return
-                except Exception as e:
-                    QMessageBox.warning(
-                        None,
-                        "Load Error",
-                        f"Could not load existing file:\n{str(e)}\n\nStarting fresh."
-                    )
-
-        # If no existing data or user chose to start fresh, show normal UI
         self.init_ui()
 
-    def show_visualization_directly(self, df):
-        """Show visualization window directly without main window"""
-        self.viz_window = VisualizationWindow(df)
-        self.viz_window.show()
-        # Don't show the main window
-        self.hide()
-
     def init_ui(self):
-        """Инициализация интерфейса"""
+        """Initialize the main window UI."""
         self.setWindowTitle("🌊 Wave data preprocessing pipeline")
 
         # Central widget
@@ -457,11 +408,11 @@ class MainWindow(QMainWindow):
         instruction.setStyleSheet("color: #7f8c8d; font-size: 13px; padding-bottom: 10px;")
         layout.addWidget(instruction)
 
-        # Секция INFO файла
+        # INFO file section
         info_group = self.create_info_section()
         layout.addWidget(info_group)
 
-        # Секция файлов данных
+        # Data files section
         data_group = self.create_data_section()
         layout.addWidget(data_group)
 
@@ -585,13 +536,13 @@ class MainWindow(QMainWindow):
         return group
 
     def on_info_dropped(self, files):
-        """Обработка перетаскивания INFO файла"""
+        """Handle INFO file drop event."""
         if files:
-            # Берём первый файл
+            # Take the first file only
             self.set_info_file(files[0])
 
     def on_data_dropped(self, files):
-        """Обработка перетаскивания файлов данных"""
+        """Handle data files drop event."""
         if files:
             self.add_data_files(files)
 
@@ -792,8 +743,7 @@ class MainWindow(QMainWindow):
 
         if success and result_df is not None:
             # Get output file path
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            output_folder = script_dir / "Output"
+            output_folder = OUTPUT_FOLDER
             output_file = output_folder / "Step1_TXTtoCSV.csv"
             viz_cache_file = output_folder / "Step1_Visualization.csv"
 
@@ -858,7 +808,7 @@ class MainWindow(QMainWindow):
         self.close()
 
     def apply_global_styles(self):
-        """Применить глобальные стили"""
+        """Apply global stylesheet."""
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f5f6fa;
@@ -898,6 +848,92 @@ class MainWindow(QMainWindow):
                 color: #7f8c8d;
             }
         """)
+
+
+def process_zero_mean(step2_file, output_folder, progress_bar, status):
+    """
+    Shared Step 2 post-processing:
+    1. Subtract global mean from all surface_displacement values → Step2_Zero_Mean.csv
+    2. Save per-reading averages → Parameters.csv
+    3. Save subsampled cache → Step2_Visualization.csv
+
+    Called by both VisualizationWindow (skip path) and ManualRemovalWindow (trim path).
+    """
+    status.setText("Reading Step2_Initial_Cut.csv...")
+    QApplication.processEvents()
+
+    data = pd.read_csv(step2_file, comment='#')
+
+    # Step 1: Global mean (Avg_Depth_FullRec)
+    progress_bar.setValue(85)
+    status.setText("Calculating global average (Avg_Depth_FullRec)...")
+    QApplication.processEvents()
+
+    avg_depth_full_rec = data['surface_displacement'].mean()
+
+    # Step 2: Per-reading averages
+    progress_bar.setValue(88)
+    status.setText("Calculating averages for each 20-min reading...")
+    QApplication.processEvents()
+
+    reading_averages = data.groupby('reading_number')['surface_displacement'].mean().reset_index()
+    reading_averages.columns = ['reading_number', 'average_depth']
+
+    # Step 3: Subtract global mean
+    progress_bar.setValue(92)
+    status.setText("Creating Zero Mean data...")
+    QApplication.processEvents()
+
+    zero_mean_data = data.copy()
+    zero_mean_data['surface_displacement'] = zero_mean_data['surface_displacement'] - avg_depth_full_rec
+
+    # Step 4: Save Step2_Zero_Mean.csv
+    progress_bar.setValue(95)
+    status.setText("Saving Step2_Zero_Mean.csv...")
+    QApplication.processEvents()
+
+    zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
+    with open(zero_mean_file, 'w', encoding='utf-8') as f:
+        f.write("# STEP 2: Zero Mean - Global average subtracted\n")
+        f.write("# ==========================================\n")
+        f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
+        f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
+        f.write(f"# All surface_displacement values have this subtracted\n")
+        f.write("# ==========================================\n")
+
+    zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
+
+    # Step 5: Save subsampled visualization cache
+    progress_bar.setValue(96)
+    status.setText("Creating Step2_Visualization.csv...")
+    QApplication.processEvents()
+
+    subsample_step = max(1, len(zero_mean_data) // VISUALIZATION_TARGET_POINTS)
+    viz_data = zero_mean_data.iloc[::subsample_step].copy()
+
+    step2_viz_file = output_folder / "Step2_Visualization.csv"
+    with open(step2_viz_file, 'w', encoding='utf-8') as f:
+        f.write("# STEP 2: Visualization Cache - Subsampled Zero Mean data\n")
+        f.write("# ==========================================\n")
+        f.write(f"# Sampled points: {len(viz_data)}\n")
+        f.write(f"# Original points: {len(zero_mean_data)}\n")
+        f.write("# ==========================================\n")
+
+    viz_data.to_csv(step2_viz_file, mode='a', index=False)
+
+    # Step 6: Save Parameters.csv
+    progress_bar.setValue(98)
+    status.setText("Saving Parameters.csv...")
+    QApplication.processEvents()
+
+    parameters_file = output_folder / "Parameters.csv"
+    with open(parameters_file, 'w', encoding='utf-8') as f:
+        f.write("# PARAMETERS - 20-minute readings and their characteristics\n")
+        f.write("# ==========================================\n")
+        f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
+        f.write("# ==========================================\n")
+
+    reading_averages.to_csv(parameters_file, mode='a', index=False)
 
 
 class VisualizationWindow(QMainWindow):
@@ -1039,20 +1075,13 @@ class VisualizationWindow(QMainWindow):
 
         # SECOND: Overlay red segments on top (no connecting lines between segments)
         if dive_mask.sum() > 0:
-            # Find continuous dive segments
             dive_indices = np.where(dive_mask)[0]
 
-            # Split into continuous segments
-            segments = []
-            if len(dive_indices) > 0:
-                segment_start = dive_indices[0]
-                for i in range(1, len(dive_indices)):
-                    if dive_indices[i] != dive_indices[i-1] + 1:
-                        # End of segment
-                        segments.append((segment_start, dive_indices[i-1]))
-                        segment_start = dive_indices[i]
-                # Last segment
-                segments.append((segment_start, dive_indices[-1]))
+            # Vectorised segment extraction: find index gaps > 1
+            breaks = np.where(np.diff(dive_indices) > 1)[0]
+            starts = np.concatenate([[dive_indices[0]], dive_indices[breaks + 1]])
+            ends   = np.concatenate([dive_indices[breaks], [dive_indices[-1]]])
+            segments = list(zip(starts, ends))
 
             # Plot each segment separately (prevents connecting lines)
             for i, (start, end) in enumerate(segments):
@@ -1199,8 +1228,7 @@ class VisualizationWindow(QMainWindow):
 
     def on_skip_removal(self):
         """Handle skip button click - copy Step1 to Step2 with progress bar and Zero Mean processing"""
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
+        output_folder = OUTPUT_FOLDER
         step1_file = output_folder / "Step1_TXTtoCSV.csv"
         step2_file = output_folder / "Step2_Initial_Cut.csv"
 
@@ -1261,86 +1289,8 @@ class VisualizationWindow(QMainWindow):
             )
 
     def process_zero_mean(self, step2_file, output_folder, progress_bar, status):
-        """
-        Process Zero Mean - same as in ManualRemovalWindow
-        """
-        # Read Step2 data
-        status.setText("Reading Step2_Initial_Cut.csv...")
-        QApplication.processEvents()
-
-        data = pd.read_csv(step2_file, comment='#')
-
-        # Calculate global average
-        progress_bar.setValue(85)
-        status.setText("Calculating global average (Avg_Depth_FullRec)...")
-        QApplication.processEvents()
-
-        avg_depth_full_rec = data['surface_displacement'].mean()
-
-        # Calculate average for each reading
-        progress_bar.setValue(88)
-        status.setText("Calculating averages for each 20-min reading...")
-        QApplication.processEvents()
-
-        reading_averages = data.groupby('reading_number')['surface_displacement'].mean().reset_index()
-        reading_averages.columns = ['reading_number', 'average_depth']
-
-        # Create Zero Mean data
-        progress_bar.setValue(92)
-        status.setText("Creating Zero Mean data...")
-        QApplication.processEvents()
-
-        zero_mean_data = data.copy()
-        zero_mean_data['surface_displacement'] = zero_mean_data['surface_displacement'] - avg_depth_full_rec
-
-        # Save Zero Mean file
-        progress_bar.setValue(95)
-        status.setText("Saving Step2_Zero_Mean.csv...")
-        QApplication.processEvents()
-
-        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
-        with open(zero_mean_file, 'w', encoding='utf-8') as f:
-            f.write("# STEP 2: Zero Mean - Global average subtracted\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
-            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
-            f.write(f"# All surface_displacement values have this subtracted\n")
-            f.write("# ==========================================\n")
-
-        zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
-
-        # Create Step2_Visualization.csv (subsampled for caching)
-        progress_bar.setValue(96)
-        status.setText("Creating Step2_Visualization.csv...")
-        QApplication.processEvents()
-
-        target_points = VISUALIZATION_TARGET_POINTS  # 5000 points optimal for FullHD
-        subsample_step = max(1, len(zero_mean_data) // target_points)
-        viz_data = zero_mean_data.iloc[::subsample_step].copy()
-
-        step2_viz_file = output_folder / "Step2_Visualization.csv"
-        with open(step2_viz_file, 'w', encoding='utf-8') as f:
-            f.write("# STEP 2: Visualization Cache - Subsampled Zero Mean data\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Sampled points: {len(viz_data)}\n")
-            f.write(f"# Original points: {len(zero_mean_data)}\n")
-            f.write("# ==========================================\n")
-
-        viz_data.to_csv(step2_viz_file, mode='a', index=False)
-
-        # Save Parameters file
-        progress_bar.setValue(98)
-        status.setText("Saving Parameters.csv...")
-        QApplication.processEvents()
-
-        parameters_file = output_folder / "Parameters.csv"
-        with open(parameters_file, 'w', encoding='utf-8') as f:
-            f.write("# PARAMETERS - 20-minute readings and their characteristics\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
-            f.write("# ==========================================\n")
-
-        reading_averages.to_csv(parameters_file, mode='a', index=False)
+        """Delegate to the shared module-level implementation."""
+        process_zero_mean(step2_file, output_folder, progress_bar, status)
 
     def build_full_data_step1(self):
         """Load and plot full Step1 data in new window"""
@@ -1350,8 +1300,7 @@ class VisualizationWindow(QMainWindow):
         pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
         progress.show(); QApplication.processEvents()
         try:
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            df = pd.read_csv(script_dir / 'Output' / 'Step1_TXTtoCSV.csv', comment='#')
+            df = pd.read_csv(OUTPUT_FOLDER / 'Step1_TXTtoCSV.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 1: Full Raw Data')
@@ -1710,8 +1659,7 @@ class ManualRemovalWindow(QMainWindow):
         # Capture ax/canvas/fig/leg_type in closure — redraws THIS graph in place
         def _build_full_in_place(checked=False, _ax=ax, _canvas=canvas, _fig=fig, _lt=leg_type):
             import matplotlib.dates as _mdates
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            full_file = script_dir / 'Output' / 'Step1_TXTtoCSV.csv'
+            full_file = OUTPUT_FOLDER / 'Step1_TXTtoCSV.csv'
             if not full_file.exists():
                 QMessageBox.warning(self, 'Not found', f'Could not find:\n{full_file}')
                 return
@@ -1838,15 +1786,10 @@ class ManualRemovalWindow(QMainWindow):
             status.setText("Reading full CSV file...")
             QApplication.processEvents()
 
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            csv_file = script_dir / "Output" / "Step1_TXTtoCSV.csv"
-
-            # Count lines for progress
-            with open(csv_file, 'rb') as f:
-                total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1
+            csv_file = OUTPUT_FOLDER / "Step1_TXTtoCSV.csv"
 
             progress_bar.setValue(20)
-            status.setText(f"Loading {total_lines:,} rows...")
+            status.setText("Loading full dataset...")
             QApplication.processEvents()
 
             # Read full data
@@ -1905,7 +1848,7 @@ class ManualRemovalWindow(QMainWindow):
             QApplication.processEvents()
 
             # Save to Step2
-            output_folder = script_dir / "Output"
+            output_folder = OUTPUT_FOLDER
             step2_file = output_folder / "Step2_Initial_Cut.csv"
 
             # Write with metadata
@@ -1948,89 +1891,8 @@ class ManualRemovalWindow(QMainWindow):
             )
 
     def process_zero_mean(self, step2_file, output_folder, progress_bar, status):
-        """
-        Process Zero Mean:
-        1. Calculate Avg_Depth_FullRec (mean of all surface displacement values)
-        2. Create Step2_Zero_Mean.csv (all values - Avg_Depth_FullRec)
-        3. Create Parameters.csv with reading means and metadata
-        """
-        # Read Step2 data
-        status.setText("Reading Step2_Initial_Cut.csv...")
-        QApplication.processEvents()
-
-        data = pd.read_csv(step2_file, comment='#')
-
-        # Step 1: Calculate global average
-        progress_bar.setValue(85)
-        status.setText("Calculating global average (Avg_Depth_FullRec)...")
-        QApplication.processEvents()
-
-        avg_depth_full_rec = data['surface_displacement'].mean()
-
-        # Step 2: Calculate average for each reading
-        progress_bar.setValue(88)
-        status.setText("Calculating averages for each 20-min reading...")
-        QApplication.processEvents()
-
-        reading_averages = data.groupby('reading_number')['surface_displacement'].mean().reset_index()
-        reading_averages.columns = ['reading_number', 'average_depth']
-
-        # Step 4: Create Zero Mean data (subtract global average from all points)
-        progress_bar.setValue(92)
-        status.setText("Creating Zero Mean data...")
-        QApplication.processEvents()
-
-        zero_mean_data = data.copy()
-        zero_mean_data['surface_displacement'] = zero_mean_data['surface_displacement'] - avg_depth_full_rec
-
-        # Step 4: Save Zero Mean file
-        progress_bar.setValue(95)
-        status.setText("Saving Step2_Zero_Mean.csv...")
-        QApplication.processEvents()
-
-        zero_mean_file = output_folder / "Step2_Zero_Mean.csv"
-        with open(zero_mean_file, 'w', encoding='utf-8') as f:
-            f.write("# STEP 2: Zero Mean - Global average subtracted\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
-            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
-            f.write(f"# All surface_displacement values have this subtracted\n")
-            f.write("# ==========================================\n")
-
-        zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
-
-        # Create Step2_Visualization.csv (subsampled for caching)
-        progress_bar.setValue(96)
-        status.setText("Creating Step2_Visualization.csv...")
-        QApplication.processEvents()
-
-        target_points = VISUALIZATION_TARGET_POINTS  # 5000 points optimal for FullHD
-        subsample_step = max(1, len(zero_mean_data) // target_points)
-        viz_data = zero_mean_data.iloc[::subsample_step].copy()
-
-        step2_viz_file = output_folder / "Step2_Visualization.csv"
-        with open(step2_viz_file, 'w', encoding='utf-8') as f:
-            f.write("# STEP 2: Visualization Cache - Subsampled Zero Mean data\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Sampled points: {len(viz_data)}\n")
-            f.write(f"# Original points: {len(zero_mean_data)}\n")
-            f.write("# ==========================================\n")
-
-        viz_data.to_csv(step2_viz_file, mode='a', index=False)
-
-        # Step 5: Save Parameters file
-        progress_bar.setValue(98)
-        status.setText("Saving Parameters.csv...")
-        QApplication.processEvents()
-
-        parameters_file = output_folder / "Parameters.csv"
-        with open(parameters_file, 'w', encoding='utf-8') as f:
-            f.write("# PARAMETERS - 20-minute readings and their characteristics\n")
-            f.write("# ==========================================\n")
-            f.write(f"# Average Depth (Full Record): {avg_depth_full_rec:.6f}\n")
-            f.write("# ==========================================\n")
-
-        reading_averages.to_csv(parameters_file, mode='a', index=False)
+        """Delegate to the shared module-level implementation."""
+        process_zero_mean(step2_file, output_folder, progress_bar, status)
 
     def build_full_data_step2(self):
         """Load and plot full Step2 data in new window"""
@@ -2040,8 +1902,7 @@ class ManualRemovalWindow(QMainWindow):
         pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
         progress.show(); QApplication.processEvents()
         try:
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            df = pd.read_csv(script_dir / 'Output' / 'Step2_Initial_Cut.csv', comment='#')
+            df = pd.read_csv(OUTPUT_FOLDER / 'Step2_Initial_Cut.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 2: Full Initial Cut Data')
@@ -2079,6 +1940,7 @@ class Step3FourierWindow(QMainWindow):
         self.spectrum_full    = None   # complex FFT — for apply_transform
         self.frequencies_full = None
         self.cutoff_freq      = None
+        self.data_step2       = None   # cached Step2_Zero_Mean DataFrame (timestamps + reading_number)
         self.init_ui()
         self.load_and_transform()
 
@@ -2205,8 +2067,7 @@ class Step3FourierWindow(QMainWindow):
 
     def load_and_transform(self):
         """Load Step2 data and perform FFT"""
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
+        output_folder = OUTPUT_FOLDER
 
         step2_file = output_folder / "Step2_Zero_Mean.csv"
         step3_spectrum = output_folder / "Step3_Spectrum.csv"
@@ -2307,6 +2168,10 @@ class Step3FourierWindow(QMainWindow):
 
             data = pd.read_csv(step2_file, comment='#')
             y = data['surface_displacement'].values
+
+            # Cache the full DataFrame — apply_transform needs timestamps and
+            # reading_number but must not re-read the file (it may be hundreds of MB).
+            self.data_step2 = data
 
             # Read sensor frequency from Step2 metadata header
             sensor_freq = read_sensor_freq_from_csv(step2_file)
@@ -2556,8 +2421,7 @@ class Step3FourierWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please select cutoff frequency first!")
             return
 
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
+        output_folder = OUTPUT_FOLDER
 
         # Show progress dialog
         progress_dialog = QDialog(self)
@@ -2591,10 +2455,8 @@ class Step3FourierWindow(QMainWindow):
 
             s_filtered = self.spectrum_full.copy()
 
-            # Remove frequencies below cutoff
-            for i in range(len(self.frequencies_full)):
-                if abs(self.frequencies_full[i]) < self.cutoff_freq:
-                    s_filtered[i] = 0 + 0j
+            # Zero out frequencies below cutoff — vectorised, O(N) not O(N) with Python overhead
+            s_filtered[np.abs(self.frequencies_full) < self.cutoff_freq] = 0j
 
             progress_bar.setValue(40)
             status.setText("Computing inverse FFT...")
@@ -2609,9 +2471,13 @@ class Step3FourierWindow(QMainWindow):
             status.setText("Saving transformed data...")
             QApplication.processEvents()
 
-            # Load original data to get timestamps
+            # Reuse the DataFrame cached during FFT computation.
+            # If loading from checkpoint (cache path), data_step2 is None → read once.
             step2_file = output_folder / "Step2_Zero_Mean.csv"
-            data_orig = pd.read_csv(step2_file, comment='#')
+            if self.data_step2 is not None:
+                data_orig = self.data_step2
+            else:
+                data_orig = pd.read_csv(step2_file, comment='#')
 
             # Create transformed dataframe
             data_transformed = data_orig.copy()
@@ -2697,8 +2563,7 @@ class Step3FourierWindow(QMainWindow):
         Compute and display windowed Fourier Transform (Spectrogram)
         Based on 8_WindowFT.py algorithm
         """
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
+        output_folder = OUTPUT_FOLDER
         step2_file = output_folder / "Step2_Zero_Mean.csv"
 
         # Show progress dialog
@@ -2735,9 +2600,9 @@ class Step3FourierWindow(QMainWindow):
             y = data['surface_displacement'].values
 
             # Parameters from UI spinboxes
-            WindowSize = self.spin_window.value()   # минут
-            DeltaWindow = self.spin_delta.value()   # секунд
-            part = self.spin_part.value()            # процент от спектра
+            WindowSize = self.spin_window.value()   # minutes
+            DeltaWindow = self.spin_delta.value()   # seconds
+            part = self.spin_part.value()            # percent of spectrum to keep
             Sensor_Frequency = read_sensor_freq_from_csv(step2_file)
 
             progress_bar.setValue(20)
@@ -2745,18 +2610,19 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Compute window parameters
-            window = WindowSize * 60 * Sensor_Frequency  # размер окна в точках
-            n = int((len(y) - window) / (DeltaWindow * Sensor_Frequency))  # число окон
+            window = WindowSize * 60 * Sensor_Frequency  # window size in samples
+            # Number of windows that fit with the given shift
+            n = int((len(y) - window) / (DeltaWindow * Sensor_Frequency))
 
             from scipy.fftpack import rfft, rfftfreq
             from scipy.signal.windows import hann
 
-            # ВАЖНО: rfftfreq с угловой частотой (рад/с)
+            # Angular frequency axis in rad/s
             w = rfftfreq(window, (1 / Sensor_Frequency) / (2 * np.pi))
             # Number of spectrum points to keep (slice [0:spec_len] is always valid)
             # spec_idx is used only for w[spec_idx] — must be < len(w)
-            spec_len = int(len(w) * 0.01 * part)          # может равняться len(w) при 100%
-            spec_idx = min(spec_len, len(w) - 1)           # безопасный индекс для w[]
+            spec_len = int(len(w) * 0.01 * part)          # equals len(w) when part=100
+            spec_idx = min(spec_len, len(w) - 1)           # safe index for w[] — never out of bounds
             z = []
 
             progress_bar.setValue(30)
@@ -2772,8 +2638,9 @@ class Step3FourierWindow(QMainWindow):
                     status.setText(f"Processing window {i+1}/{n}...")
                     QApplication.processEvents()
 
-                # Extract window
-                arr = y[i*DeltaWindow : window + i*DeltaWindow]
+                # Extract window — offset in samples = window index × shift_samples
+                shift_samples = DeltaWindow * Sensor_Frequency
+                arr = y[i * shift_samples : window + i * shift_samples]
 
                 # Apply Hann window
                 mask = hann(len(arr))
@@ -2978,37 +2845,37 @@ class Step3FourierWindow(QMainWindow):
 
         comparison_window.exec_()
 
-    def build_full_spectrum_linear(self):
-        """Load and plot full spectrum in linear scale (top graph button)"""
-        progress = QDialog(self); progress.setWindowTitle('Loading Full Spectrum')
-        progress.setModal(True); progress.setFixedSize(400, 100)
-        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Spectrum.csv...'))
-        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
-        progress.show(); QApplication.processEvents()
+    def _build_full_spectrum(self, log_scale: bool):
+        """Load Step3_Spectrum.csv and display it in a FullSpectrumWindow."""
+        progress = QDialog(self)
+        progress.setWindowTitle('Loading Full Spectrum')
+        progress.setModal(True)
+        progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress)
+        _l.addWidget(QLabel('Loading Step3_Spectrum.csv...'))
+        pb = QProgressBar()
+        pb.setRange(0, 0)
+        _l.addWidget(pb)
+        progress.show()
+        QApplication.processEvents()
         try:
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            df = pd.read_csv(script_dir / 'Output' / 'Step3_Spectrum.csv', comment='#')
+            df = pd.read_csv(OUTPUT_FOLDER / 'Step3_Spectrum.csv', comment='#')
             progress.close()
-            _w = FullSpectrumWindow(df, log_scale=False)
-            QApplication.instance()._full_spectrum_linear_window = _w; _w.show()
+            _w = FullSpectrumWindow(df, log_scale=log_scale)
+            attr = '_full_spectrum_window' if log_scale else '_full_spectrum_linear_window'
+            setattr(QApplication.instance(), attr, _w)
+            _w.show()
         except Exception as e:
-            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full spectrum:\n{str(e)}')
+            progress.close()
+            QMessageBox.critical(self, 'Error', f'Could not load full spectrum:\n{str(e)}')
+
+    def build_full_spectrum_linear(self):
+        """Show full spectrum in linear scale (top graph toolbar button)."""
+        self._build_full_spectrum(log_scale=False)
 
     def build_full_spectrum(self):
-        """Load and plot full spectrum data"""
-        progress = QDialog(self); progress.setWindowTitle('Loading Full Spectrum')
-        progress.setModal(True); progress.setFixedSize(400, 100)
-        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Spectrum.csv...'))
-        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
-        progress.show(); QApplication.processEvents()
-        try:
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            df = pd.read_csv(script_dir / 'Output' / 'Step3_Spectrum.csv', comment='#')
-            progress.close()
-            _w = FullSpectrumWindow(df)
-            QApplication.instance()._full_spectrum_window = _w; _w.show()
-        except Exception as e:
-            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full spectrum:\n{str(e)}')
+        """Show full spectrum in log scale (bottom graph toolbar button)."""
+        self._build_full_spectrum(log_scale=True)
 
 class Step4ProcessingWindow(QMainWindow):
     """Window for Step 4: Spike removal and RMS filtering"""
@@ -3151,9 +3018,8 @@ class Step4ProcessingWindow(QMainWindow):
 
     def load_and_visualize(self):
         """Load Step3_Visualization and create plot"""
-        self.hide()  # Скрыть окно во время загрузки
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
+        self.hide()  # Hide window while loading — shown maximized after data is ready
+        output_folder = OUTPUT_FOLDER
 
         step3_viz = output_folder / "Step3_Visualization.csv"
 
@@ -3291,8 +3157,7 @@ class Step4ProcessingWindow(QMainWindow):
         Start spike removal and/or RMS filtering with real-time visualization
         Calculate ALL wave parameters in single pass
         """
-        script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-        output_folder = script_dir / "Output"
+        output_folder = OUTPUT_FOLDER
 
         step2_file = output_folder / "Step3_Transformed.csv"
         step2_viz = output_folder / "Step3_Visualization.csv"
@@ -3344,15 +3209,17 @@ class Step4ProcessingWindow(QMainWindow):
             from scipy.signal.windows import hann
 
             # FFT with Hann window
-            mask = hann(len(arr))
-            s = np.abs(rfft(arr * mask))
-            w = rfftfreq(len(s), (1 / sensor_freq) / (2 * np.pi))
+            win = hann(len(arr))
+            s_full = np.abs(rfft(arr * win))
+            # Frequency grid must be built from the original signal length,
+            # NOT from len(s_full) which is already the one-sided rfft output.
+            w = rfftfreq(len(arr), (1 / sensor_freq) / (2 * np.pi))
 
             # Filter frequencies: use half-Nyquist as upper bound
             # (sensor_freq * π is the Nyquist in rad/s; half gives a practical limit)
             n = sensor_freq * np.pi / 2
             ind = w < n
-            s = s[ind]
+            s = s_full[ind]
             w = w[ind]
 
             if len(w) < 2:
@@ -3565,7 +3432,7 @@ class Step4ProcessingWindow(QMainWindow):
                     QApplication.processEvents()
 
                 arr_data = reading_arrays[reading_num]
-                arr = arr_data['surface_displacement'].copy()  # ВАЖНО: .copy() для возможности модификации!
+                arr = arr_data['surface_displacement'].copy()  # .copy() required — arr is modified in-place during spike removal
                 arr_indices = arr_data['indices']
                 arr_timestamps = arr_data['timestamps']
                 reading_start = arr_data['start']
@@ -3837,8 +3704,7 @@ class Step4ProcessingWindow(QMainWindow):
         pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
         progress.show(); QApplication.processEvents()
         try:
-            script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-            df = pd.read_csv(script_dir / 'Output' / 'Step3_Transformed.csv', comment='#')
+            df = pd.read_csv(OUTPUT_FOLDER / 'Step3_Transformed.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
@@ -4222,8 +4088,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    script_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
-    output_folder = script_dir / "Output"
+    output_folder = OUTPUT_FOLDER
 
     # CHECKPOINT 4: Check if Step4_Filtered exists (Pipeline complete)
     step4_filtered = output_folder / "Step4_Filtered.csv"
@@ -4409,21 +4274,23 @@ def main():
                 progress_dialog.show()
                 app.processEvents()
 
-                # Count total lines (fast)
-                status.setText("Counting lines...")
+                # Adaptive subsample: count newlines in one fast binary read,
+                # then pick step so we keep ~10 000 rows for visualization.
+                # This is much cheaper than the old line-by-line generator because
+                # bytes.count() is a single C-level scan with no Python objects per line.
+                status.setText("Scanning file size...")
                 app.processEvents()
 
                 with open(csv_file, 'rb') as f:
-                    total_lines = sum(1 for _ in f if not _.startswith(b'#')) - 1  # -1 for header
+                    raw = f.read()
+                # Subtract comment lines and the one column-header line (-2 total)
+                total_lines = raw.count(b'\n') - raw.count(b'\n#') - 2
+                del raw  # free memory immediately
 
-                status.setText(f"Loading {total_lines:,} records (sampling for speed)...")
-                app.processEvents()
-
-                # Calculate how many rows to sample
                 target_rows = 10000
                 sample_step = max(1, total_lines // target_rows)
 
-                status.setText(f"Reading file in chunks (keeping 1 of every {sample_step} rows)...")
+                status.setText(f"Loading {total_lines:,} records (keeping 1 of every {sample_step} rows)...")
                 app.processEvents()
 
                 # Read in chunks and subsample on the fly
@@ -4432,17 +4299,10 @@ def main():
                 row_counter = 0
 
                 for chunk in pd.read_csv(csv_file, comment='#', chunksize=chunk_size):
-                    # Sample from this chunk
-                    chunk_indices = range(row_counter, row_counter + len(chunk))
-                    keep_indices = [i for i in chunk_indices if i % sample_step == 0]
-
+                    keep_indices = [i for i in range(len(chunk)) if (row_counter + i) % sample_step == 0]
                     if keep_indices:
-                        local_indices = [i - row_counter for i in keep_indices]
-                        sampled_data.append(chunk.iloc[local_indices])
-
+                        sampled_data.append(chunk.iloc[keep_indices])
                     row_counter += len(chunk)
-
-                    # Update progress
                     progress_pct = min(100, int(row_counter / total_lines * 100))
                     status.setText(f"Loading... {progress_pct}% ({row_counter:,} / {total_lines:,})")
                     app.processEvents()
