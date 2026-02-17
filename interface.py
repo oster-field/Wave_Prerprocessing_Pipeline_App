@@ -1789,24 +1789,39 @@ class ManualRemovalWindow(QMainWindow):
             csv_file = OUTPUT_FOLDER / "Step1_TXTtoCSV.csv"
 
             progress_bar.setValue(20)
-            status.setText("Loading full dataset...")
+            status.setText(f"Loading full dataset ({csv_file.name})...")
             QApplication.processEvents()
 
-            # Read full data
+            # Read full data — the heavy operation; progress stays at 20 % while
+            # pandas reads the file, then jumps to 45 % when done.
             full_data = pd.read_csv(csv_file, comment='#')
-            full_data['timestamp'] = pd.to_datetime(full_data['timestamp'], errors='coerce')
 
             progress_bar.setValue(40)
-            status.setText("Converting indices from visualization to full data...")
+            status.setText("Parsing timestamps...")
             QApplication.processEvents()
 
-            # Helper: find closest index in full_data by timestamp
-            def _ts_to_full_idx(ts):
-                diff = np.abs((full_data['timestamp'] - ts).dt.total_seconds())
-                return int(diff.argmin())
+            full_data['timestamp'] = pd.to_datetime(full_data['timestamp'], errors='coerce')
 
-            # Helper: convert viz index → timestamp → full data index
-            subsample_step = len(full_data) // len(self.viz_data_df)
+            progress_bar.setValue(45)
+            status.setText("Building timestamp index for binary search...")
+            QApplication.processEvents()
+
+            # Timestamps are strictly monotonically increasing (generated via
+            # pd.date_range in Step 1), so binary search via searchsorted is
+            # O(log N) — completes in microseconds even for 50 M rows.
+            _ts_array = full_data['timestamp'].values  # numpy datetime64 array — sorted
+
+            def _ts_to_full_idx(ts):
+                needle = np.datetime64(ts)
+                pos = int(np.searchsorted(_ts_array, needle))
+                pos = max(0, min(pos, len(_ts_array) - 1))
+                if pos > 0:
+                    d_prev = abs((_ts_array[pos - 1] - needle).astype('int64'))
+                    d_curr = abs((_ts_array[pos]     - needle).astype('int64'))
+                    if d_prev < d_curr:
+                        pos -= 1
+                return pos
+
             def _viz_idx_to_full_idx(viz_idx):
                 viz_ts = self.viz_data_df['timestamp'].iloc[viz_idx]
                 return _ts_to_full_idx(viz_ts)
@@ -1816,17 +1831,25 @@ class ManualRemovalWindow(QMainWindow):
             ending_full_idx = None
 
             if self.cut_timestamps['beginning'] is not None:
-                # User double-clicked — find exact position in full data by timestamp
+                progress_bar.setValue(50)
+                status.setText("Locating deployment cut point...")
+                QApplication.processEvents()
                 beginning_full_idx = _ts_to_full_idx(self.cut_timestamps['beginning'])
             elif self.beginning_viz_range:
-                # No click — use end of auto-detected leg
+                progress_bar.setValue(50)
+                status.setText("Locating deployment boundary...")
+                QApplication.processEvents()
                 beginning_full_idx = _viz_idx_to_full_idx(self.beginning_viz_range[1])
 
             if self.cut_timestamps['ending'] is not None:
-                # User double-clicked — find exact position in full data by timestamp
+                progress_bar.setValue(55)
+                status.setText("Locating retrieval cut point...")
+                QApplication.processEvents()
                 ending_full_idx = _ts_to_full_idx(self.cut_timestamps['ending'])
             elif self.ending_viz_range:
-                # No click — use start of auto-detected leg
+                progress_bar.setValue(55)
+                status.setText("Locating retrieval boundary...")
+                QApplication.processEvents()
                 ending_full_idx = _viz_idx_to_full_idx(self.ending_viz_range[0])
 
             progress_bar.setValue(60)
@@ -1843,8 +1866,8 @@ class ManualRemovalWindow(QMainWindow):
                 end_relative = ending_full_idx - trimmed_data.index[0]
                 trimmed_data = trimmed_data.iloc[:end_relative]
 
-            progress_bar.setValue(80)
-            status.setText("Saving to Step2_Initial_Cut.csv...")
+            progress_bar.setValue(70)
+            status.setText(f"Trimmed to {len(trimmed_data):,} points. Saving to Step2_Initial_Cut.csv...")
             QApplication.processEvents()
 
             # Save to Step2
@@ -1860,6 +1883,9 @@ class ManualRemovalWindow(QMainWindow):
                 f.write(f"# Trimmed points: {len(trimmed_data):,}\n")
                 f.write(f"# Points removed: {len(full_data) - len(trimmed_data):,}\n")
                 f.write("# ==========================================\n")
+
+            status.setText(f"Writing {len(trimmed_data):,} rows to disk...")
+            QApplication.processEvents()
 
             trimmed_data.to_csv(step2_file, mode='a', index=False)
 
