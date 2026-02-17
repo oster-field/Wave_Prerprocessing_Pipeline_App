@@ -18,6 +18,38 @@ from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 
 # ==============================================================================
+# MODERN MATPLOTLIB THEME (light background, refined colors)
+# ==============================================================================
+plt.rcParams.update({
+    'figure.facecolor':     '#ffffff',
+    'axes.facecolor':       '#f8fafc',
+    'axes.edgecolor':       '#e2e8f0',
+    'axes.linewidth':       0.8,
+    'axes.labelcolor':      '#374151',
+    'axes.labelsize':       11,
+    'axes.titlesize':       12,
+    'axes.titlecolor':      '#111827',
+    'axes.titleweight':     'semibold',
+    'axes.spines.top':      False,
+    'axes.spines.right':    False,
+    'xtick.color':          '#6b7280',
+    'ytick.color':          '#6b7280',
+    'xtick.labelsize':      9,
+    'ytick.labelsize':      9,
+    'grid.color':           '#e5e7eb',
+    'grid.linewidth':       0.7,
+    'grid.alpha':           1.0,
+    'legend.facecolor':     '#ffffff',
+    'legend.edgecolor':     '#e2e8f0',
+    'legend.framealpha':    0.95,
+    'legend.fontsize':      9,
+    'legend.labelcolor':    '#374151',
+    'figure.titlesize':     13,
+    'font.family':          'DejaVu Sans',
+    'lines.antialiased':    True,
+})
+
+# ==============================================================================
 # PATHS
 # ==============================================================================
 SCRIPT_DIR    = Path(__file__).parent
@@ -278,26 +310,28 @@ class FileDropZone(QLabel):
         self.setMinimumHeight(120)
         self.setStyleSheet("""
             QLabel {
-                border: 3px dashed #3498db;
+                border: 2px dashed #cbd5e1;
                 border-radius: 10px;
-                background-color: #ecf0f1;
-                color: #2c3e50;
-                font-size: 14px;
+                background-color: #f8fafc;
+                color: #94a3b8;
+                font-size: 13px;
                 padding: 20px;
+                font-family: 'Segoe UI', sans-serif;
             }
             QLabel:hover {
-                background-color: #d5dbdb;
-                border-color: #2980b9;
+                background-color: #f0f9ff;
+                border-color: #38bdf8;
+                color: #0369a1;
             }
         """)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-            self.setStyleSheet(self.styleSheet().replace('#ecf0f1', '#a8e6cf'))
+            self.setStyleSheet(self.styleSheet().replace('#f8fafc', '#f0fdf4').replace('dashed #cbd5e1', 'solid #4ade80'))
 
     def dragLeaveEvent(self, event):
-        self.setStyleSheet(self.styleSheet().replace('#a8e6cf', '#ecf0f1'))
+        self.setStyleSheet(self.styleSheet().replace('#f0fdf4', '#f8fafc').replace('solid #4ade80', 'dashed #cbd5e1'))
 
     def dropEvent(self, event: QDropEvent):
         files = [url.toLocalFile() for url in event.mimeData().urls()]
@@ -311,7 +345,7 @@ class FileDropZone(QLabel):
         if valid_files:
             self.files_dropped.emit(valid_files)
 
-        self.setStyleSheet(self.styleSheet().replace('#a8e6cf', '#ecf0f1'))
+        self.setStyleSheet(self.styleSheet().replace('#f0fdf4', '#f8fafc').replace('solid #4ade80', 'dashed #cbd5e1'))
 
 
 class ProgressDialog(QDialog):
@@ -326,9 +360,10 @@ class ProgressDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # Title
-        title = QLabel("🔄 Processing Wave Data")
-        title.setFont(QFont("Arial", 14, QFont.Bold))
+        title = QLabel("Processing Wave Data")
+        title.setFont(QFont("Segoe UI", 13, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("color: #111827; padding: 8px; letter-spacing: 0.2px;")
         layout.addWidget(title)
 
         # Progress bar
@@ -338,13 +373,19 @@ class ProgressDialog(QDialog):
         self.progress_bar.setValue(0)
         self.progress_bar.setStyleSheet("""
             QProgressBar {
-                border: 2px solid #3498db;
-                border-radius: 5px;
+                border: none;
+                border-radius: 6px;
                 text-align: center;
-                height: 30px;
+                height: 26px;
+                background-color: #f1f5f9;
+                color: #64748b;
+                font-size: 11px;
+                font-family: 'Segoe UI', sans-serif;
             }
             QProgressBar::chunk {
-                background-color: #3498db;
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #0ea5e9, stop:1 #38bdf8);
+                border-radius: 6px;
             }
         """)
         layout.addWidget(self.progress_bar)
@@ -352,7 +393,7 @@ class ProgressDialog(QDialog):
         # Status message
         self.status_label = QLabel("Starting...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("color: #7f8c8d; padding: 10px;")
+        self.status_label.setStyleSheet("color: #6b7280; padding: 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.status_label)
 
         # Log window
@@ -361,11 +402,13 @@ class ProgressDialog(QDialog):
         self.log_text.setMaximumHeight(80)
         self.log_text.setStyleSheet("""
             QTextEdit {
-                border: 1px solid #bdc3c7;
-                border-radius: 3px;
-                background-color: #ecf0f1;
-                font-family: monospace;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                background-color: #f9fafb;
+                color: #6b7280;
+                font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 10px;
+                padding: 4px;
             }
         """)
         layout.addWidget(self.log_text)
@@ -396,16 +439,16 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
 
         # Header
-        header = QLabel("🌊 Wave data preprocessing pipeline")
-        header.setFont(QFont("Arial", 20, QFont.Bold))
+        header = QLabel("🌊  Wave Data Preprocessing Pipeline")
+        header.setFont(QFont("Segoe UI", 20, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #2c3e50; padding: 20px;")
+        header.setStyleSheet("color: #111827; padding: 24px 20px 6px 20px; letter-spacing: -0.3px;")
         layout.addWidget(header)
 
         # Instruction
-        instruction = QLabel("📁 Load files for wave data processing")
+        instruction = QLabel("Load metadata and data files to begin processing")
         instruction.setAlignment(Qt.AlignCenter)
-        instruction.setStyleSheet("color: #7f8c8d; font-size: 13px; padding-bottom: 10px;")
+        instruction.setStyleSheet("color: #9ca3af; font-size: 13px; padding-bottom: 16px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(instruction)
 
         # INFO file section
@@ -417,32 +460,39 @@ class MainWindow(QMainWindow):
         layout.addWidget(data_group)
 
         # Continue button
-        self.btn_continue = QPushButton("▶️ Continue to step 1 - plot raw data")
+        self.btn_continue = QPushButton("▶  Continue to Step 1 — Plot Raw Data")
         self.btn_continue.setEnabled(False)
         self.btn_continue.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: #0ea5e9;
                 color: white;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 15px;
+                font-size: 15px;
+                font-weight: 600;
+                padding: 13px 20px;
                 border-radius: 8px;
-                margin-top: 20px;
+                margin-top: 14px;
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
+                letter-spacing: 0.2px;
             }
             QPushButton:hover:enabled {
-                background-color: #229954;
+                background-color: #0284c7;
+            }
+            QPushButton:pressed:enabled {
+                background-color: #0369a1;
             }
             QPushButton:disabled {
-                background-color: #95a5a6;
+                background-color: #e5e7eb;
+                color: #9ca3af;
             }
         """)
         self.btn_continue.clicked.connect(self.on_continue)
         layout.addWidget(self.btn_continue)
 
         # Status
-        self.status_label = QLabel("⏳ Waiting for files...")
+        self.status_label = QLabel("Waiting for files...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("color: #7f8c8d; padding: 10px;")
+        self.status_label.setStyleSheet("color: #9ca3af; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(self.status_label)
 
         layout.addStretch()
@@ -454,7 +504,7 @@ class MainWindow(QMainWindow):
 
     def create_info_section(self):
         """Section for INFO file"""
-        group = QGroupBox("📋 INFO File")
+        group = QGroupBox("INFO File")
         layout = QVBoxLayout()
 
         # Drop zone for INFO
@@ -481,7 +531,7 @@ class MainWindow(QMainWindow):
 
         # Info about loaded file
         self.info_label = QLabel("No file loaded")
-        self.info_label.setStyleSheet("color: #e74c3c; font-style: italic; padding: 5px;")
+        self.info_label.setStyleSheet("color: #9ca3af; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.info_label)
 
         group.setLayout(layout)
@@ -489,7 +539,7 @@ class MainWindow(QMainWindow):
 
     def create_data_section(self):
         """Section for data files"""
-        group = QGroupBox("📊 Data Files")
+        group = QGroupBox("Data Files")
         layout = QVBoxLayout()
 
         # Drop zone for data
@@ -519,17 +569,31 @@ class MainWindow(QMainWindow):
         self.data_list.setMaximumHeight(200)
         self.data_list.setStyleSheet("""
             QListWidget {
-                border: 1px solid #bdc3c7;
-                border-radius: 5px;
-                background-color: white;
-                padding: 5px;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                background-color: #ffffff;
+                padding: 4px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                color: #374151;
+            }
+            QListWidget::item {
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #e0f2fe;
+                color: #0369a1;
+            }
+            QListWidget::item:hover {
+                background-color: #f8fafc;
             }
         """)
         layout.addWidget(self.data_list)
 
         # File counter
         self.data_count_label = QLabel("Files loaded: 0")
-        self.data_count_label.setStyleSheet("color: #7f8c8d; padding: 5px;")
+        self.data_count_label.setStyleSheet("color: #9ca3af; padding: 4px 6px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.data_count_label)
 
         group.setLayout(layout)
@@ -589,11 +653,11 @@ class MainWindow(QMainWindow):
 
             self.info_label.setText("\n".join(lines))
             self.info_label.setStyleSheet(
-                "color: #27ae60; font-weight: bold; padding: 5px; font-family: monospace;"
+                "color: #16a34a; font-weight: 600; padding: 5px 8px; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.6;"
             )
         except Exception as e:
-            self.info_label.setText(f"✅ Loaded: {filename}\n⚠️ Parse error: {str(e)}")
-            self.info_label.setStyleSheet("color: #e67e22; font-weight: bold; padding: 5px;")
+            self.info_label.setText(f"Loaded: {filename}\n⚠  Parse error: {str(e)}")
+            self.info_label.setStyleSheet("color: #d97706; font-weight: 600; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
 
         self.btn_clear_info.setEnabled(True)
         self.update_status()
@@ -691,7 +755,7 @@ class MainWindow(QMainWindow):
         """Clear INFO file"""
         self.info_file = None
         self.info_label.setText("No file loaded")
-        self.info_label.setStyleSheet("color: #e74c3c; font-style: italic; padding: 5px;")
+        self.info_label.setStyleSheet("color: #ef4444; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         self.btn_clear_info.setEnabled(False)
         self.update_status()
 
@@ -706,20 +770,20 @@ class MainWindow(QMainWindow):
     def update_status(self):
         """Update status and continue button availability"""
         if self.info_file and self.data_files:
-            self.status_label.setText(f"✅ Ready to process: INFO + {len(self.data_files)} data files")
-            self.status_label.setStyleSheet("color: #27ae60; font-weight: bold; padding: 10px;")
+            self.status_label.setText(f"Ready to process — INFO + {len(self.data_files)} data files loaded")
+            self.status_label.setStyleSheet("color: #16a34a; font-weight: 600; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(True)
         elif self.info_file:
-            self.status_label.setText("⏳ Load data files to continue")
-            self.status_label.setStyleSheet("color: #f39c12; padding: 10px;")
+            self.status_label.setText("Load data files to continue")
+            self.status_label.setStyleSheet("color: #d97706; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(False)
         elif self.data_files:
-            self.status_label.setText("⏳ Load INFO file to continue")
-            self.status_label.setStyleSheet("color: #f39c12; padding: 10px;")
+            self.status_label.setText("Load INFO file to continue")
+            self.status_label.setStyleSheet("color: #d97706; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(False)
         else:
-            self.status_label.setText("⏳ Waiting for files...")
-            self.status_label.setStyleSheet("color: #7f8c8d; padding: 10px;")
+            self.status_label.setText("Waiting for files...")
+            self.status_label.setStyleSheet("color: #9ca3af; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(False)
 
     def on_continue(self):
@@ -811,41 +875,50 @@ class MainWindow(QMainWindow):
         """Apply global stylesheet."""
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f5f6fa;
+                background-color: #f9fafb;
+            }
+            QWidget {
+                background-color: #f9fafb;
+                font-family: 'Segoe UI', sans-serif;
             }
             QGroupBox {
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #bdc3c7;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 15px;
-                background-color: white;
+                font-weight: 600;
+                font-size: 13px;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+                margin-top: 14px;
+                padding-top: 16px;
+                background-color: #ffffff;
+                color: #374151;
             }
             QGroupBox::title {
-                color: #2c3e50;
+                color: #374151;
                 subcontrol-origin: margin;
-                left: 15px;
+                left: 14px;
                 padding: 0 8px;
+                background-color: #ffffff;
             }
             QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
+                background-color: #f3f4f6;
+                color: #374151;
+                border: 1px solid #d1d5db;
+                padding: 8px 18px;
+                border-radius: 6px;
                 font-size: 13px;
-                font-weight: bold;
+                font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
-                background-color: #2980b9;
+                background-color: #e5e7eb;
+                border-color: #9ca3af;
             }
             QPushButton:pressed {
-                background-color: #21618c;
+                background-color: #d1d5db;
             }
             QPushButton:disabled {
-                background-color: #bdc3c7;
-                color: #7f8c8d;
+                background-color: #f3f4f6;
+                color: #9ca3af;
+                border-color: #e5e7eb;
             }
         """)
 
@@ -956,10 +1029,10 @@ class VisualizationWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
 
         # Header
-        header = QLabel("📊 Raw Data Visualization")
-        header.setFont(QFont("Arial", 18, QFont.Bold))
+        header = QLabel("Raw Data Visualization")
+        header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #2c3e50; padding: 15px;")
+        header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
         # Info label
@@ -967,7 +1040,7 @@ class VisualizationWindow(QMainWindow):
                     f"Frequency: {self.data_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz")
         info_label = QLabel(info_text)
         info_label.setAlignment(Qt.AlignCenter)
-        info_label.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
+        info_label.setStyleSheet("color: #6b7280; font-size: 12px; padding: 4px; font-family: 'Consolas', monospace;")
         layout.addWidget(info_label)
 
         # Plot canvas with interactive toolbar
@@ -986,36 +1059,41 @@ class VisualizationWindow(QMainWindow):
         self.btn_skip = QPushButton("Continue WITHOUT manual removal")
         self.btn_skip.setStyleSheet("""
             QPushButton {
-                background-color: #e74c3c;
-                color: white;
+                background-color: #fff1f2;
+                color: #e11d48;
                 font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
+                font-weight: 600;
+                padding: 13px 20px;
+                border-radius: 8px;
+                border: 1px solid #fecdd3;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
-                background-color: #c0392b;
+                background-color: #ffe4e6;
+                border-color: #fda4af;
             }
         """)
         self.btn_skip.clicked.connect(self.on_skip_removal)
         btn_layout.addWidget(self.btn_skip)
 
-        self.btn_manual = QPushButton("✏️ Proceed with Manual Data Removal")
+        self.btn_manual = QPushButton("✏  Proceed with Manual Data Removal")
         self.btn_manual.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: #0ea5e9;
                 color: white;
                 font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
+                font-weight: 600;
+                padding: 13px 20px;
+                border-radius: 8px;
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
-                background-color: #229954;
+                background-color: #0284c7;
             }
             QPushButton:disabled {
-                background-color: #95a5a6;
-                color: #ecf0f1;
+                background-color: #e5e7eb;
+                color: #9ca3af;
             }
         """)
         self.btn_manual.clicked.connect(self.on_manual_removal)
@@ -1071,7 +1149,7 @@ class VisualizationWindow(QMainWindow):
 
         # FIRST: Draw complete blue line (no gaps)
         ax.plot(timestamps, surface_displacement,
-               linewidth=0.5, color='#3498db', alpha=0.7, label='Wave data', zorder=1)
+               linewidth=0.5, color='#3b82f6', alpha=0.7, label='Wave data', zorder=1)
 
         # SECOND: Overlay red segments on top (no connecting lines between segments)
         if dive_mask.sum() > 0:
@@ -1087,7 +1165,7 @@ class VisualizationWindow(QMainWindow):
             for i, (start, end) in enumerate(segments):
                 label = 'Sensor deployment/retrieval' if i == 0 else None
                 ax.plot(timestamps[start:end+1], surface_displacement[start:end+1],
-                       linewidth=1.0, color='#e74c3c', alpha=0.9, label=label, zorder=2)
+                       linewidth=1.0, color='#f43f5e', alpha=0.9, label=label, zorder=2)
 
         ax.set_xlabel('Date', fontsize=12)
         ax.set_ylabel('Surface displacement (meters)', fontsize=12)
@@ -1250,7 +1328,7 @@ class VisualizationWindow(QMainWindow):
 
         status = QLabel("Copying file...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(status)
 
         progress_dialog.show()
@@ -1312,7 +1390,24 @@ class VisualizationWindow(QMainWindow):
         """Apply global styles"""
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f5f6fa;
+                background-color: #f9fafb;
+            }
+            QWidget {
+                background-color: #f9fafb;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QPushButton {
+                background-color: #f3f4f6;
+                color: #374151;
+                border: 1px solid #d1d5db;
+                padding: 8px 18px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #e5e7eb;
+                border-color: #9ca3af;
             }
         """)
 
@@ -1342,10 +1437,10 @@ class ManualRemovalWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
 
         # Header
-        header = QLabel("✂️ Manual Dive Section Removal")
-        header.setFont(QFont("Arial", 18, QFont.Bold))
+        header = QLabel("Manual Dive Section Removal")
+        header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #2c3e50; padding: 15px;")
+        header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
         # Instructions
@@ -1355,7 +1450,7 @@ class ManualRemovalWindow(QMainWindow):
             "Retrieval: removes everything AFTER double-click."
         )
         instructions.setAlignment(Qt.AlignCenter)
-        instructions.setStyleSheet("color: #7f8c8d; font-size: 12px; padding: 5px;")
+        instructions.setStyleSheet("color: #6b7280; font-size: 12px; padding: 4px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(instructions)
 
         # Detect dives on visualization data
@@ -1363,7 +1458,7 @@ class ManualRemovalWindow(QMainWindow):
 
         # Beginning dive plot (DEPLOYMENT)
         if self.beginning_data is not None:
-            beginning_group = QGroupBox("🔻 Sensor Deployment")
+            beginning_group = QGroupBox("Sensor Deployment")
             beginning_layout = QVBoxLayout()
             self.beginning_canvas = self.create_interactive_plot(
                 self.beginning_data,
@@ -1376,7 +1471,7 @@ class ManualRemovalWindow(QMainWindow):
 
         # Ending dive plot (RETRIEVAL)
         if self.ending_data is not None:
-            ending_group = QGroupBox("🔺 Sensor Retrieval")
+            ending_group = QGroupBox("Sensor Retrieval")
             ending_layout = QVBoxLayout()
             self.ending_canvas = self.create_interactive_plot(
                 self.ending_data,
@@ -1390,18 +1485,20 @@ class ManualRemovalWindow(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        btn_save = QPushButton("💾 Continue with trimmed data")
+        btn_save = QPushButton("▶  Continue with trimmed data")
         btn_save.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: #0ea5e9;
                 color: white;
                 font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
+                font-weight: 600;
+                padding: 13px 20px;
+                border-radius: 8px;
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
-                background-color: #229954;
+                background-color: #0284c7;
             }
         """)
         btn_save.clicked.connect(self.save_trimmed_data)
@@ -1553,19 +1650,19 @@ class ManualRemovalWindow(QMainWindow):
         full_surface_displacement = self.viz_data_df['surface_displacement'].values
 
         # Plot complete data
-        ax.plot(full_timestamps, full_surface_displacement, linewidth=0.5, color='#3498db', alpha=0.7)
+        ax.plot(full_timestamps, full_surface_displacement, linewidth=0.5, color='#3b82f6', alpha=0.7)
 
         # Highlight the detected dive section in red
         if leg_type == 'beginning' and self.beginning_viz_range:
             start, end = self.beginning_viz_range
             dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
             dive_surface_displacement = full_surface_displacement[start:end+1]
-            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
+            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#f43f5e', alpha=0.9, label='Detected dive')
         elif leg_type == 'ending' and self.ending_viz_range:
             start, end = self.ending_viz_range
             dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
             dive_surface_displacement = full_surface_displacement[start:end+1]
-            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#e74c3c', alpha=0.9, label='Detected dive')
+            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#f43f5e', alpha=0.9, label='Detected dive')
 
         # No axis labels, only tick values
         ax.set_title(title, fontsize=12, fontweight='bold')
@@ -1620,7 +1717,7 @@ class ManualRemovalWindow(QMainWindow):
 
                 # Draw vertical line at double-click position
                 self.cut_lines[leg_type] = ax.axvline(
-                    event.xdata, color='green', linewidth=2,
+                    event.xdata, color='#10b981', linewidth=2,
                     linestyle='--', label='Cut point', zorder=10
                 )
 
@@ -1696,7 +1793,7 @@ class ManualRemovalWindow(QMainWindow):
                 _ax.cla()
 
                 # Draw full (non-subsampled) data
-                _ax.plot(ts, prs, linewidth=0.3, color='#3498db', alpha=0.8)
+                _ax.plot(ts, prs, linewidth=0.3, color='#3b82f6', alpha=0.8)
 
                 # Re-draw dive highlight
                 if _lt == 'beginning' and self.beginning_viz_range:
@@ -1705,19 +1802,19 @@ class ManualRemovalWindow(QMainWindow):
                     t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
                     mask = (ts >= t0) & (ts <= t1)
                     _ax.plot(ts[mask], prs[mask], linewidth=0.6,
-                             color='#e74c3c', alpha=0.9, label='Detected dive')
+                             color='#f43f5e', alpha=0.9, label='Detected dive')
                 elif _lt == 'ending' and self.ending_viz_range:
                     s, e = self.ending_viz_range
                     viz_ts = self.viz_data_df['timestamp']
                     t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
                     mask = (ts >= t0) & (ts <= t1)
                     _ax.plot(ts[mask], prs[mask], linewidth=0.6,
-                             color='#e74c3c', alpha=0.9, label='Detected dive')
+                             color='#f43f5e', alpha=0.9, label='Detected dive')
 
                 # Restore user's cut line and shading if they had set one
                 if saved_cut_line_x is not None:
                     self.cut_lines[_lt] = _ax.axvline(
-                        saved_cut_line_x, color='green', linewidth=2,
+                        saved_cut_line_x, color='#10b981', linewidth=2,
                         linestyle='--', label='Cut point', zorder=10
                     )
                 if saved_shading is not None:
@@ -1774,7 +1871,7 @@ class ManualRemovalWindow(QMainWindow):
 
         status = QLabel("Loading full data...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(status)
 
         progress_dialog.show()
@@ -1940,20 +2037,40 @@ class ManualRemovalWindow(QMainWindow):
         """Apply global styles"""
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f5f6fa;
+                background-color: #f9fafb;
+            }
+            QWidget {
+                background-color: #f9fafb;
+                font-family: 'Segoe UI', sans-serif;
             }
             QGroupBox {
-                font-weight: bold;
-                border: 2px solid #bdc3c7;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
+                font-weight: 600;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+                margin-top: 12px;
+                padding-top: 12px;
+                background-color: #ffffff;
+                color: #374151;
             }
             QGroupBox::title {
-                color: #2c3e50;
+                color: #374151;
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
+                left: 14px;
+                padding: 0 8px;
+                background-color: #ffffff;
+            }
+            QPushButton {
+                background-color: #f3f4f6;
+                color: #374151;
+                border: 1px solid #d1d5db;
+                padding: 8px 18px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #e5e7eb;
+                border-color: #9ca3af;
             }
         """)
 
@@ -1984,8 +2101,8 @@ class Step3FourierWindow(QMainWindow):
         top_card = QWidget()
         top_card.setStyleSheet("""
             QWidget {
-                background-color: #f0f3f7;
-                border: 1px solid #d5dce8;
+                background-color: #f8fafc;
+                border: 1px solid #e5e7eb;
                 border-radius: 8px;
             }
         """)
@@ -1995,20 +2112,25 @@ class Step3FourierWindow(QMainWindow):
         top_bar.setSpacing(8)
 
         lbl_style = (
-            "font-size: 13px; color: #34495e; background: transparent; border: none;"
+            "font-size: 13px; color: #6b7280; background: transparent; border: none; font-family: 'Segoe UI', sans-serif;"
         )
         spin_style = """
             QSpinBox {
                 font-size: 13px;
-                font-weight: bold;
-                color: #2c3e50;
-                background: white;
+                font-weight: 600;
+                color: #111827;
+                background: #ffffff;
                 padding: 3px 6px;
-                border: 1.5px solid #b0bec5;
-                border-radius: 5px;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
                 min-width: 72px;
+                font-family: 'Segoe UI', sans-serif;
             }
-            QSpinBox:focus { border-color: #ff8c00; }
+            QSpinBox:focus { border-color: #0ea5e9; }
+            QSpinBox::up-button, QSpinBox::down-button {
+                background: #f3f4f6;
+                border-radius: 3px;
+            }
         """
 
         # Window size
@@ -2044,16 +2166,17 @@ class Step3FourierWindow(QMainWindow):
         btn_spectrogram.setFixedHeight(36)
         btn_spectrogram.setStyleSheet("""
             QPushButton {
-                background-color: #ff8c00;
-                color: white;
+                background-color: #fff7ed;
+                color: #c2410c;
                 font-size: 13px;
-                font-weight: bold;
+                font-weight: 600;
                 padding: 0 18px;
                 border-radius: 6px;
-                border: none;
+                border: 1px solid #fed7aa;
+                font-family: 'Segoe UI', sans-serif;
             }
-            QPushButton:hover  { background-color: #e67e00; }
-            QPushButton:pressed{ background-color: #cc6f00; }
+            QPushButton:hover  { background-color: #ffedd5; border-color: #fdba74; }
+            QPushButton:pressed{ background-color: #fee2c8; }
         """)
         btn_spectrogram.clicked.connect(self.plot_spectrogram)
         top_bar.addWidget(btn_spectrogram)
@@ -2068,22 +2191,25 @@ class Step3FourierWindow(QMainWindow):
         # Apply button at bottom
         btn_layout = QHBoxLayout()
 
-        self.btn_continue = QPushButton("▶️ Apply and Continue")
+        self.btn_continue = QPushButton("▶  Apply and Continue")
         self.btn_continue.setEnabled(False)  # Disabled until cutoff selected
         self.btn_continue.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: #0ea5e9;
                 color: white;
                 font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
+                font-weight: 600;
+                padding: 13px 20px;
+                border-radius: 8px;
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover:enabled {
-                background-color: #229954;
+                background-color: #0284c7;
             }
             QPushButton:disabled {
-                background-color: #95a5a6;
+                background-color: #e5e7eb;
+                color: #9ca3af;
             }
         """)
         self.btn_continue.clicked.connect(self.apply_transform)
@@ -2122,7 +2248,7 @@ class Step3FourierWindow(QMainWindow):
 
             status = QLabel("Loading visualization...")
             status.setAlignment(Qt.AlignCenter)
-            status.setStyleSheet("color: #7f8c8d;")
+            status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             layout.addWidget(status)
 
             progress_dialog.show()
@@ -2180,7 +2306,7 @@ class Step3FourierWindow(QMainWindow):
 
         status = QLabel("Loading data...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(status)
 
         progress_dialog.show()
@@ -2325,7 +2451,7 @@ class Step3FourierWindow(QMainWindow):
         canvas_top = FigureCanvas(fig_top)
         ax_top = fig_top.add_subplot(111)
 
-        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color='green', alpha=0.9)
+        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color='#10b981', alpha=0.9)
         ax_top.set_xlabel('ω, [rad/s]', fontsize=11)
         ax_top.set_ylabel('S(ω), [m²/s]', fontsize=11)
         ax_top.grid(True, alpha=0.3)
@@ -2345,7 +2471,7 @@ class Step3FourierWindow(QMainWindow):
         canvas_bottom = FigureCanvas(fig_bottom)
         ax_bottom = fig_bottom.add_subplot(111)
 
-        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color='green', alpha=0.9)
+        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color='#10b981', alpha=0.9)
         ax_bottom.set_xlabel('ω, [rad/s]', fontsize=11)
         ax_bottom.set_ylabel('S(ω), [m²/s]', fontsize=11)
         ax_bottom.set_xlim(0, 0.1)
@@ -2467,7 +2593,7 @@ class Step3FourierWindow(QMainWindow):
 
         status = QLabel("Filtering spectrum...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(status)
 
         progress_dialog.show()
@@ -2610,7 +2736,7 @@ class Step3FourierWindow(QMainWindow):
 
         status = QLabel("Loading data...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(status)
 
         progress_dialog.show()
@@ -2784,9 +2910,10 @@ class Step3FourierWindow(QMainWindow):
         layout = QVBoxLayout(comparison_window)
 
         # Header
-        header = QLabel("Fourier Transform Applied - Before vs After")
-        header.setFont(QFont("Arial", 16, QFont.Bold))
+        header = QLabel("Fourier Transform Applied — Before vs After")
+        header.setFont(QFont("Segoe UI", 15, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("color: #111827; padding: 12px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
         progress_bar.setValue(70)
@@ -2801,11 +2928,11 @@ class Step3FourierWindow(QMainWindow):
 
         # Plot before (orange, more transparent per your request)
         ax.plot(data_before['timestamp'], data_before['surface_displacement'],
-               linewidth=0.5, color='#FFA500', alpha=0.6, label='Before', zorder=1)
+               linewidth=0.5, color='#f97316', alpha=0.6, label='Before', zorder=1)
 
         # Plot after (blue, less transparent per your request)
         ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['surface_displacement'],
-               linewidth=0.5, color='#3498db', alpha=0.7, label='After', zorder=2)
+               linewidth=0.5, color='#3b82f6', alpha=0.7, label='After', zorder=2)
 
         # Horizontal line at y=0 (on top)
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=10)
@@ -2838,18 +2965,20 @@ class Step3FourierWindow(QMainWindow):
         progress_dialog.close()
 
         # Continue button
-        btn_continue = QPushButton("▶️ Continue to Step 4")
+        btn_continue = QPushButton("▶  Continue to Step 4")
         btn_continue.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: #0ea5e9;
                 color: white;
                 font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
+                font-weight: 600;
+                padding: 13px 20px;
+                border-radius: 8px;
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
-                background-color: #229954;
+                background-color: #0284c7;
             }
         """)
 
@@ -2925,9 +3054,9 @@ class Step4ProcessingWindow(QMainWindow):
 
         # Header
         header = QLabel("Step 4: Data Quality Processing")
-        header.setFont(QFont("Arial", 18, QFont.Bold))
+        header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #2c3e50; padding: 15px;")
+        header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
         # Graph placeholder
@@ -2964,7 +3093,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         # Current frequency label — will be updated after data loads
         self.lbl_freq_from = QLabel("? Hz")
-        self.lbl_freq_from.setStyleSheet("font-weight: bold; color: #2c3e50;")
+        self.lbl_freq_from.setStyleSheet("font-weight: 600; color: #0284c7; font-family: 'Consolas', monospace;")
         spline_layout.addWidget(self.lbl_freq_from)
 
         spline_layout.addWidget(QLabel("→"))
@@ -2976,9 +3105,12 @@ class Step4ProcessingWindow(QMainWindow):
         self.spline_freq_input.setFixedWidth(90)
         self.spline_freq_input.setStyleSheet("""
             QSpinBox {
-                font-size: 13px; padding: 2px 4px;
-                border: 1.5px solid #b0bec5; border-radius: 4px;
+                font-size: 13px; padding: 2px 6px;
+                border: 1px solid #d1d5db; border-radius: 6px;
+                background: #ffffff; color: #111827;
+                font-family: 'Segoe UI', sans-serif;
             }
+            QSpinBox:focus { border-color: #0ea5e9; }
         """)
         spline_layout.addWidget(self.spline_freq_input)
         spline_layout.addStretch()
@@ -3008,7 +3140,7 @@ class Step4ProcessingWindow(QMainWindow):
             return row
 
         for row in [
-            _legend_item("#27ae60", "Processed recording", 'fill'),
+            _legend_item("#22c55e", "Processed recording", 'fill'),
             _legend_item("#e74c3c", "Removed recording",   'fill'),
             _legend_item("#e74c3c", "Spike",               'circle'),
         ]:
@@ -3022,19 +3154,21 @@ class Step4ProcessingWindow(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        self.btn_start = QPushButton("▶️ Start Processing")
+        self.btn_start = QPushButton("▶  Start Processing")
         self.btn_start.setEnabled(True)  # Always enabled
         self.btn_start.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
+                background-color: #0ea5e9;
                 color: white;
                 font-size: 14px;
-                font-weight: bold;
-                padding: 15px;
-                border-radius: 5px;
+                font-weight: 600;
+                padding: 13px 20px;
+                border-radius: 8px;
+                border: none;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
-                background-color: #229954;
+                background-color: #0284c7;
             }
         """)
         self.btn_start.clicked.connect(self.start_processing)
@@ -3062,7 +3196,8 @@ class Step4ProcessingWindow(QMainWindow):
 
         _lbl = QLabel("Step 4: Spike Removal & RMS Filtering")
         _lbl.setAlignment(Qt.AlignCenter)
-        _lbl.setFont(QFont("Arial", 11, QFont.Bold))
+        _lbl.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        _lbl.setStyleSheet("color: #111827;")
         _lay.addWidget(_lbl)
 
         progress_bar = QProgressBar()
@@ -3071,7 +3206,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         status = QLabel("Loading Step3_Visualization.csv...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         _lay.addWidget(status)
 
         progress_dialog.show()
@@ -3130,7 +3265,7 @@ class Step4ProcessingWindow(QMainWindow):
         timestamps = data['timestamp']
         surface_displacement = data['surface_displacement'].values
 
-        ax.plot(timestamps, surface_displacement, linewidth=0.5, color='#3498db', alpha=0.7)
+        ax.plot(timestamps, surface_displacement, linewidth=0.5, color='#3b82f6', alpha=0.7)
 
         # Add horizontal line at y=0 (thick black)
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
@@ -3369,7 +3504,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         status = QLabel("Loading data...")
         status.setAlignment(Qt.AlignCenter)
-        status.setStyleSheet("color: #7f8c8d;")
+        status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(status)
 
         progress_dialog.show()
@@ -3748,11 +3883,11 @@ class FullDataWindow(QMainWindow):
         central_widget = QWidget(); self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         info = QLabel(f"Total points: {len(data_df):,} | Memory: ~{len(data_df)*24/1024/1024:.1f} MB")
-        info.setStyleSheet("font-size: 12px; color: #7f8c8d; padding: 5px;")
+        info.setStyleSheet("font-size: 12px; color: #6b7280; padding: 5px; font-family: 'Consolas', monospace;")
         layout.addWidget(info)
         fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
-        ax.plot(data_df['timestamp'], data_df['surface_displacement'].values, linewidth=0.5, color='#3498db', alpha=0.8)
+        ax.plot(data_df['timestamp'], data_df['surface_displacement'].values, linewidth=0.5, color='#3b82f6', alpha=0.8)
         ax.set_xlabel('Date', fontsize=12); ax.set_ylabel('Surface displacement (meters)', fontsize=12)
         ax.set_title(f'{title} — {len(data_df):,} points', fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
@@ -3774,7 +3909,7 @@ class FullSpectrumWindow(QMainWindow):
         central_widget = QWidget(); self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         info = QLabel(f"Total frequency points: {len(spectrum_df):,}")
-        info.setStyleSheet("font-size: 12px; color: #7f8c8d; padding: 5px;")
+        info.setStyleSheet("font-size: 12px; color: #6b7280; padding: 5px; font-family: 'Consolas', monospace;")
         layout.addWidget(info)
         fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
@@ -3793,7 +3928,7 @@ class FullSpectrumWindow(QMainWindow):
             # Linear scale — overview, exclude low-freq noise (same as top graph in Step 3)
             mask = freq > 0.05
             title_suffix = "ω > 0.05, linear scale"
-        ax.plot(freq[mask], s[mask], linewidth=0.8, color='#e74c3c')
+        ax.plot(freq[mask], s[mask], linewidth=0.8, color='#f43f5e')
         ax.set_xlabel('ω, [rad/s]', fontsize=12); ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
         ax.set_title(f'Full Spectrum — {mask.sum():,} points — {title_suffix}', fontsize=14, fontweight='bold')
         if log_scale:
@@ -3842,10 +3977,10 @@ class PipelineCompleteWindow(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
 
         # ── Header ──────────────────────────────────────────────────────────
-        title = QLabel("✅  Step 4 complete!")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
+        title = QLabel("✓  Step 4 Complete!")
+        title.setFont(QFont("Segoe UI", 15, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("color: #27ae60; padding-bottom: 4px;")
+        title.setStyleSheet("color: #16a34a; padding-bottom: 4px; letter-spacing: -0.2px;")
         layout.addWidget(title)
 
         # ── Stats ────────────────────────────────────────────────────────────
@@ -3858,8 +3993,9 @@ class PipelineCompleteWindow(QDialog):
         )
         stats_lbl = QLabel(stats_text)
         stats_lbl.setStyleSheet(
-            "background:#f0f3f7; border-radius:6px; padding:10px 14px;"
-            "font-size:13px; color:#2c3e50;"
+            "background:#f8fafc; border-radius:8px; padding:12px 16px;"
+            "font-size:13px; color:#374151; border: 1px solid #e5e7eb;"
+            "font-family: 'Segoe UI', sans-serif; line-height: 1.6;"
         )
         stats_lbl.setTextFormat(Qt.RichText)
         layout.addWidget(stats_lbl)
@@ -3871,20 +4007,21 @@ class PipelineCompleteWindow(QDialog):
             "• <tt>Step4_Filtered.csv</tt> — filtered surface_displacement time-series"
         )
         kept_lbl.setTextFormat(Qt.RichText)
-        kept_lbl.setStyleSheet("font-size:12px; color:#555; padding: 4px 0;")
+        kept_lbl.setStyleSheet("font-size:12px; color:#6b7280; padding: 4px 0; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(kept_lbl)
 
         layout.addSpacing(4)
 
         # ── Buttons ──────────────────────────────────────────────────────────
         # 1. Clear cache
-        btn_cache = QPushButton("🗑️  Clear cache  (keep Parameters & Filtered)")
+        btn_cache = QPushButton("🗑  Clear cache  (keep Parameters & Filtered)")
         btn_cache.setStyleSheet("""
             QPushButton {
-                background:#ecf0f1; color:#2c3e50; font-size:13px;
-                padding:10px; border-radius:5px; border:1px solid #bdc3c7;
+                background:#f3f4f6; color:#374151; font-size:13px;
+                padding:10px; border-radius:6px; border:1px solid #d1d5db;
+                font-family: 'Segoe UI', sans-serif;
             }
-            QPushButton:hover { background:#d5d8dc; }
+            QPushButton:hover { background:#e5e7eb; border-color:#9ca3af; }
         """)
         btn_cache.clicked.connect(self._clear_cache)
         layout.addWidget(btn_cache)
@@ -3893,10 +4030,11 @@ class PipelineCompleteWindow(QDialog):
         btn_save = QPushButton("💾  Export data…")
         btn_save.setStyleSheet("""
             QPushButton {
-                background:#2980b9; color:white; font-size:13px;
-                padding:10px; border-radius:5px;
+                background:#0ea5e9; color:white; font-size:13px;
+                padding:10px; border-radius:6px; border: none;
+                font-family: 'Segoe UI', sans-serif; font-weight: 600;
             }
-            QPushButton:hover { background:#2471a3; }
+            QPushButton:hover { background:#0284c7; }
         """)
         btn_save.clicked.connect(self._export_data)
         layout.addWidget(btn_save)
@@ -3905,10 +4043,11 @@ class PipelineCompleteWindow(QDialog):
         btn_exit = QPushButton("✖  Exit")
         btn_exit.setStyleSheet("""
             QPushButton {
-                background:#e74c3c; color:white; font-size:13px;
-                font-weight:bold; padding:10px; border-radius:5px;
+                background:#fff1f2; color:#e11d48; font-size:13px;
+                font-weight:600; padding:10px; border-radius:6px;
+                border: 1px solid #fecdd3; font-family: 'Segoe UI', sans-serif;
             }
-            QPushButton:hover { background:#c0392b; }
+            QPushButton:hover { background:#ffe4e6; border-color:#fda4af; }
         """)
         btn_exit.clicked.connect(self.on_exit_with_rename)
         layout.addWidget(btn_exit)
@@ -4114,6 +4253,150 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
+    # Global modern stylesheet — light theme with refined custom controls
+    app.setStyleSheet("""
+        QDialog, QWidget {
+            background-color: #ffffff;
+            color: #111827;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        QProgressBar {
+            border: none;
+            border-radius: 6px;
+            text-align: center;
+            height: 22px;
+            background-color: #f1f5f9;
+            color: #6b7280;
+            font-size: 11px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        QProgressBar::chunk {
+            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #0ea5e9, stop:1 #38bdf8);
+            border-radius: 6px;
+        }
+        QScrollBar:vertical {
+            background: #f8fafc;
+            width: 8px;
+            border-radius: 4px;
+            margin: 0;
+        }
+        QScrollBar::handle:vertical {
+            background: #cbd5e1;
+            border-radius: 4px;
+            min-height: 30px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background: #94a3b8;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        QScrollBar:horizontal {
+            background: #f8fafc;
+            height: 8px;
+            border-radius: 4px;
+        }
+        QScrollBar::handle:horizontal {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        QScrollBar::handle:horizontal:hover { background: #94a3b8; }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+        QCheckBox {
+            color: #374151;
+            spacing: 8px;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border: 1.5px solid #d1d5db;
+            border-radius: 4px;
+            background: #ffffff;
+        }
+        QCheckBox::indicator:checked {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                stop:0 #0ea5e9, stop:1 #0284c7);
+            border-color: #0284c7;
+            image: none;
+        }
+        QCheckBox::indicator:hover {
+            border-color: #0ea5e9;
+        }
+        QLineEdit {
+            background: #ffffff;
+            color: #111827;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 13px;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        QLineEdit:focus {
+            border-color: #0ea5e9;
+            outline: none;
+        }
+        QToolBar {
+            background: #f8fafc;
+            border: none;
+            border-bottom: 1px solid #e5e7eb;
+            spacing: 2px;
+            padding: 2px 4px;
+        }
+        QToolButton {
+            background: transparent;
+            color: #374151;
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-size: 12px;
+        }
+        QToolButton:hover {
+            background: #e5e7eb;
+        }
+        QToolButton:pressed {
+            background: #d1d5db;
+        }
+        QGroupBox {
+            font-weight: 600;
+            font-size: 13px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            margin-top: 14px;
+            padding-top: 16px;
+            background-color: #ffffff;
+            color: #374151;
+        }
+        QGroupBox::title {
+            color: #374151;
+            subcontrol-origin: margin;
+            left: 14px;
+            padding: 0 8px;
+            background-color: #ffffff;
+        }
+        QPushButton {
+            background-color: #f3f4f6;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        QPushButton:hover {
+            background-color: #e5e7eb;
+            border-color: #9ca3af;
+        }
+        QPushButton:pressed {
+            background-color: #d1d5db;
+        }
+        QPushButton:disabled {
+            background-color: #f3f4f6;
+            color: #9ca3af;
+            border-color: #e5e7eb;
+        }
+    """)
+
     output_folder = OUTPUT_FOLDER
 
     # CHECKPOINT 4: Check if Step4_Filtered exists (Pipeline complete)
@@ -4294,7 +4577,7 @@ def main():
 
                 status = QLabel("Reading file...")
                 status.setAlignment(Qt.AlignCenter)
-                status.setStyleSheet("color: #7f8c8d;")
+                status.setStyleSheet("color: #6b7280; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
                 layout.addWidget(status)
 
                 progress_dialog.show()
