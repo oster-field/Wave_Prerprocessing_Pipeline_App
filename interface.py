@@ -3452,19 +3452,20 @@ class Step4ProcessingWindow(QMainWindow):
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
             progress_bar.setValue(70)
-            status.setText("Building plot...")
+            status.setText("Opening window...")
             QApplication.processEvents()
 
-            # Create plot (can take a moment for large datasets)
-            self.create_interactive_plot(df)
-
-            progress_bar.setValue(95)
-            status.setText("Rendering...")
-            QApplication.processEvents()
-
-            progress_bar.setValue(100)
+            # Store data for deferred draw, then show maximized BEFORE building
+            # the plot so the canvas already has its final pixel size when
+            # matplotlib renders (avoids a second full render after resize).
+            self._pending_plot_df = df
+            progress_bar.setValue(90)
             progress_dialog.close()
+
             self.showMaximized()
+            # One event-loop tick later the window has its real dimensions
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, self._draw_initial_plot)
 
         except Exception as e:
             progress_dialog.close()
@@ -3474,12 +3475,21 @@ class Step4ProcessingWindow(QMainWindow):
                 f"Failed to load data:\n{str(e)}"
             )
 
+    def _draw_initial_plot(self):
+        """Deferred: called after showMaximized so canvas has final pixel size."""
+        df = getattr(self, '_pending_plot_df', None)
+        if df is not None:
+            self.create_interactive_plot(df)
+            self._pending_plot_df = None
+
     def create_interactive_plot(self, data):
         """Create interactive matplotlib plot with ALL reading boundaries"""
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 
-        fig = Figure(figsize=(14, 6), dpi=100)
+        fig = Figure(dpi=100)
         canvas = FigureCanvas(fig)
+        canvas.setSizePolicy(canvas.sizePolicy().Expanding,
+                             canvas.sizePolicy().Expanding)
 
         ax = fig.add_subplot(111)
 
@@ -3490,8 +3500,9 @@ class Step4ProcessingWindow(QMainWindow):
         ax.plot(timestamps, surface_displacement, linewidth=0.5, color=COLORS['wave_data'], alpha=0.7,
                 marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
 
-        # Add horizontal line at y=0 (thick black)
-        ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
+        # Add horizontal line at y=0 (thick black dashed)
+        ax.axhline(y=0, color='black', linewidth=1.8, linestyle='--', dashes=(6, 4),
+                   alpha=0.7, zorder=5)
 
         # Add vertical lines for ALL reading boundaries
         reading_numbers = data['reading_number'].unique()
@@ -3508,7 +3519,7 @@ class Step4ProcessingWindow(QMainWindow):
                      fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3, zorder=0)
 
-        # Set x-axis limits to data boundaries (tight zoom)
+        # Tight x-axis: first to last timestamp
         ax.set_xlim(timestamps.iloc[0], timestamps.iloc[-1])
 
         # Format dates
@@ -3534,7 +3545,7 @@ class Step4ProcessingWindow(QMainWindow):
             self.graph_layout.itemAt(i).widget().setParent(None)
 
         self.graph_layout.addWidget(toolbar)
-        self.graph_layout.addWidget(canvas)
+        self.graph_layout.addWidget(canvas, stretch=1)
 
     def start_processing(self):
         """
@@ -4106,85 +4117,222 @@ class Step4ProcessingWindow(QMainWindow):
 
 
 class FullDataWindow(QMainWindow):
+    """
+    Full-resolution data viewer.
+
+    Deferred-draw pattern: showMaximized() first, then QTimer(0) → _draw().
+    The canvas already has its final pixel size when matplotlib renders —
+    no double-render even for 50 M points.
+    """
+
     def __init__(self, data_df, title):
         super().__init__()
         self.setWindowTitle(title)
-        self.setGeometry(100, 100, 1400, 700)
-        central_widget = QWidget();
+        self._data_df = data_df
+        self._title   = title
+
+        central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
-        info = QLabel(f"Total points: {len(data_df):,} | Memory: ~{len(data_df) * 24 / 1024 / 1024:.1f} MB")
-        info.setStyleSheet("font-size: 12px; color: #6b7280; padding: 5px; font-family: 'Consolas', monospace;")
-        layout.addWidget(info)
-        fig = Figure(figsize=(14, 6), dpi=100);
-        canvas = FigureCanvas(fig)
-        ax = fig.add_subplot(111)
-        ax.plot(data_df['timestamp'], data_df['surface_displacement'].values, linewidth=0.5, color=COLORS['wave_data'],
-                alpha=0.8,
-                marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
-        ax.set_xlabel('Date', fontsize=12);
-        ax.set_ylabel('Surface displacement (meters)', fontsize=12)
-        ax.set_title(f'{title} — {len(data_df):,} points', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3, zorder=0)
-        import matplotlib.dates as mdates
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y'))
-        fig.autofmt_xdate();
-        fig.tight_layout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Empty figure — no figsize; stretches to fill the window
+        self._fig    = Figure(dpi=100)
+        self._canvas = FigureCanvas(self._fig)
+        self._canvas.setSizePolicy(
+            self._canvas.sizePolicy().Expanding,
+            self._canvas.sizePolicy().Expanding,
+        )
+
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
-        toolbar = NavigationToolbar2QT(canvas, self)
-        layout.addWidget(toolbar);
-        layout.addWidget(canvas)
-        close_btn = QPushButton("Close");
+        toolbar = NavigationToolbar2QT(self._canvas, self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self._canvas, stretch=1)
+
+        # Slim bottom bar: info label + close button
+        bottom_bar = QWidget()
+        bottom_bar.setMaximumHeight(36)
+        bottom_bar.setStyleSheet("background:#f8fafc; border-top:1px solid #e5e7eb;")
+        bar_layout = QHBoxLayout(bottom_bar)
+        bar_layout.setContentsMargins(12, 4, 12, 4)
+
+        info_lbl = QLabel(
+            f"Total points: {len(data_df):,}  |  "
+            f"Memory: ~{len(data_df) * 24 / 1024 / 1024:.1f} MB"
+        )
+        info_lbl.setStyleSheet(
+            "font-size:11px; color:#6b7280;"
+            " font-family:'Consolas',monospace; background:transparent;"
+        )
+        bar_layout.addWidget(info_lbl)
+        bar_layout.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.setFixedHeight(26)
+        close_btn.setStyleSheet(
+            "QPushButton{background:#f3f4f6;color:#374151;border:1px solid #d1d5db;"
+            "border-radius:4px;padding:2px 14px;font-size:12px;font-weight:600;}"
+            "QPushButton:hover{background:#e5e7eb;}"
+        )
         close_btn.clicked.connect(self.close)
-        layout.addWidget(close_btn)
+        bar_layout.addWidget(close_btn)
+
+        layout.addWidget(bottom_bar)
+
+        self.showMaximized()
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, self._draw)
+
+    def _draw(self):
+        """Render into the already-maximized, correctly-sized canvas."""
+        import matplotlib.dates as mdates
+
+        ax = self._fig.add_subplot(111)
+
+        ts = self._data_df['timestamp']
+        sd = self._data_df['surface_displacement'].values
+
+        ax.plot(ts, sd,
+                linewidth=0.4, color=COLORS['wave_data'], alpha=0.85,
+                marker='o', markersize=1.2,
+                markerfacecolor=COLORS['wave_data'], markeredgewidth=0,
+                zorder=2)
+
+        # Horizontal reference line at y=0
+        ax.axhline(y=0, color='black', linewidth=1.8, linestyle='--',
+                   dashes=(6, 4), alpha=0.7, zorder=4)
+
+        ax.set_xlabel('Date', fontsize=11)
+        ax.set_ylabel('Surface displacement (m)', fontsize=11)
+        ax.set_title(
+            f'{self._title} — {len(self._data_df):,} points',
+            fontsize=13, fontweight='bold',
+        )
+        ax.grid(True, alpha=0.3, zorder=0)
+
+        # Tight x-axis: clamp to first and last timestamp
+        ax.set_xlim(ts.iloc[0], ts.iloc[-1])
+
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y'))
+        self._fig.autofmt_xdate()
+        self._fig.tight_layout(pad=1.5)
+
+        self._canvas.draw()
 
 
 class FullSpectrumWindow(QMainWindow):
+    """
+    Full-resolution spectrum viewer (log or linear scale).
+
+    Same deferred-draw pattern: showMaximized() first → QTimer(0) → _draw().
+    """
+
     def __init__(self, spectrum_df, log_scale=True):
         super().__init__()
-        self.setWindowTitle("Full Spectrum")
-        self.setGeometry(100, 100, 1400, 700)
-        central_widget = QWidget();
+        title_mode = "log scale" if log_scale else "linear scale"
+        self.setWindowTitle(f"Full Spectrum — {title_mode}")
+
+        self._spectrum_df = spectrum_df
+        self._log_scale   = log_scale
+
+        central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
-        info = QLabel(f"Total frequency points: {len(spectrum_df):,}")
-        info.setStyleSheet("font-size: 12px; color: #6b7280; padding: 5px; font-family: 'Consolas', monospace;")
-        layout.addWidget(info)
-        fig = Figure(figsize=(14, 6), dpi=100);
-        canvas = FigureCanvas(fig)
-        ax = fig.add_subplot(111)
-        freq = spectrum_df['frequency'].values
-        real = spectrum_df['real'].values;
-        imag = spectrum_df['imag'].values
-        # Two-sided FFT stored in CSV → one-sided PSD needs factor 2
-        N = len(freq);
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Empty figure — stretches to fill the window
+        self._fig    = Figure(dpi=100)
+        self._canvas = FigureCanvas(self._fig)
+        self._canvas.setSizePolicy(
+            self._canvas.sizePolicy().Expanding,
+            self._canvas.sizePolicy().Expanding,
+        )
+
+        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
+        toolbar = NavigationToolbar2QT(self._canvas, self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self._canvas, stretch=1)
+
+        # Slim bottom bar
+        bottom_bar = QWidget()
+        bottom_bar.setMaximumHeight(36)
+        bottom_bar.setStyleSheet("background:#f8fafc; border-top:1px solid #e5e7eb;")
+        bar_layout = QHBoxLayout(bottom_bar)
+        bar_layout.setContentsMargins(12, 4, 12, 4)
+
+        info_lbl = QLabel(f"Total frequency points: {len(spectrum_df):,}")
+        info_lbl.setStyleSheet(
+            "font-size:11px; color:#6b7280;"
+            " font-family:'Consolas',monospace; background:transparent;"
+        )
+        bar_layout.addWidget(info_lbl)
+        bar_layout.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.setFixedHeight(26)
+        close_btn.setStyleSheet(
+            "QPushButton{background:#f3f4f6;color:#374151;border:1px solid #d1d5db;"
+            "border-radius:4px;padding:2px 14px;font-size:12px;font-weight:600;}"
+            "QPushButton:hover{background:#e5e7eb;}"
+        )
+        close_btn.clicked.connect(self.close)
+        bar_layout.addWidget(close_btn)
+
+        layout.addWidget(bottom_bar)
+
+        self.showMaximized()
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, self._draw)
+
+    def _draw(self):
+        """Render into the already-maximized canvas."""
+        freq = self._spectrum_df['frequency'].values
+        real = self._spectrum_df['real'].values
+        imag = self._spectrum_df['imag'].values
+
+        N         = len(freq)
         omega_max = np.max(np.abs(freq)) if N > 0 else 1
-        s = (real ** 2 + imag ** 2) / ((N / 2) * omega_max)
-        if log_scale:
-            # Full spectrum, skip DC (zero harmonic) and the first harmonic
-            # which is usually orders of magnitude larger and squashes the rest
-            f_min = freq[freq > 0].min() if np.any(freq > 0) else 0
-            mask = freq > f_min
+        s         = (real ** 2 + imag ** 2) / ((N / 2) * omega_max)
+
+        if self._log_scale:
+            f_min        = freq[freq > 0].min() if np.any(freq > 0) else 0
+            mask         = freq > f_min
             title_suffix = "full, log scale, DC removed"
         else:
-            # Linear scale — overview, exclude low-freq noise (same as top graph in Step 3)
-            mask = freq > 0.05
+            mask         = freq > 0.05
             title_suffix = "ω > 0.05, linear scale"
-        ax.plot(freq[mask], s[mask], linewidth=0.8, color=COLORS['dive_detect'], zorder=2)
-        ax.set_xlabel('ω, [rad/s]', fontsize=12);
-        ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
-        ax.set_title(f'Full Spectrum — {mask.sum():,} points — {title_suffix}', fontsize=14, fontweight='bold')
-        if log_scale:
-            ax.set_yscale('log')
+
+        freq_plot = freq[mask]
+        s_plot    = s[mask]
+
+        ax = self._fig.add_subplot(111)
+        ax.plot(freq_plot, s_plot,
+                linewidth=0.8, color=COLORS['dive_detect'], zorder=2)
+
+        ax.set_xlabel('ω, [rad/s]', fontsize=11)
+        ax.set_ylabel('S(ω), [m²/s]', fontsize=11)
+        ax.set_title(
+            f'Full Spectrum — {mask.sum():,} points — {title_suffix}',
+            fontsize=13, fontweight='bold',
+        )
         ax.grid(True, alpha=0.3, which='both', zorder=0)
-        fig.tight_layout()
-        from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
-        toolbar = NavigationToolbar2QT(canvas, self)
-        layout.addWidget(toolbar);
-        layout.addWidget(canvas)
-        close_btn = QPushButton("Close");
-        close_btn.clicked.connect(self.close)
-        layout.addWidget(close_btn)
+
+        # Clamp negative axes at initial view
+        if len(freq_plot) > 0:
+            ax.set_xlim(left=0)
+
+        if self._log_scale:
+            ax.set_yscale('log')
+            s_pos = s_plot[s_plot > 0]
+            if len(s_pos) > 0:
+                ax.set_ylim(bottom=s_pos.min() * 0.5)
+        else:
+            ax.set_ylim(bottom=0)
+
+        self._fig.tight_layout(pad=1.5)
+        self._canvas.draw()
 
 
 class PipelineCompleteWindow(QDialog):
