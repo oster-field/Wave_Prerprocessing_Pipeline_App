@@ -12,6 +12,7 @@ import numpy as np
 import datetime
 import re
 import matplotlib
+
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -26,41 +27,57 @@ APP_AUTHOR = "Andrei Tregubov"
 APP_YEAR = "2026"
 
 # ==============================================================================
+# SCIENTIFIC COLOR PALETTE (Viridis-inspired)
+# ==============================================================================
+COLORS = {
+    'wave_data': '#3b82f6',  # Blue - primary wave data
+    'dive_detect': '#ef4444',  # Red - dive detection
+    'filtered': '#10b981',  # Green - filtered data
+    'spectrum': '#8b5cf6',  # Purple - spectrum
+    'grid': '#e5e7eb',  # Light gray - grid
+    'text_primary': '#111827',  # Dark gray - text
+    'text_secondary': '#6b7280',  # Medium gray - labels
+}
+
+# Viridis palette for multiple lines
+VIRIDIS_COLORS = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725']
+
+# ==============================================================================
 # MODERN MATPLOTLIB THEME (light background, refined colors)
 # ==============================================================================
 plt.rcParams.update({
-    'figure.facecolor':     '#ffffff',
-    'axes.facecolor':       '#f8fafc',
-    'axes.edgecolor':       '#e2e8f0',
-    'axes.linewidth':       0.8,
-    'axes.labelcolor':      '#374151',
-    'axes.labelsize':       11,
-    'axes.titlesize':       12,
-    'axes.titlecolor':      '#111827',
-    'axes.titleweight':     'semibold',
-    'axes.spines.top':      False,
-    'axes.spines.right':    False,
-    'xtick.color':          '#6b7280',
-    'ytick.color':          '#6b7280',
-    'xtick.labelsize':      9,
-    'ytick.labelsize':      9,
-    'grid.color':           '#e5e7eb',
-    'grid.linewidth':       0.7,
-    'grid.alpha':           1.0,
-    'legend.facecolor':     '#ffffff',
-    'legend.edgecolor':     '#e2e8f0',
-    'legend.framealpha':    0.95,
-    'legend.fontsize':      9,
-    'legend.labelcolor':    '#374151',
-    'figure.titlesize':     13,
-    'font.family':          'DejaVu Sans',
-    'lines.antialiased':    True,
+    'figure.facecolor': '#ffffff',
+    'axes.facecolor': '#f8fafc',
+    'axes.edgecolor': '#e2e8f0',
+    'axes.linewidth': 0.8,
+    'axes.labelcolor': '#374151',
+    'axes.labelsize': 11,
+    'axes.titlesize': 12,
+    'axes.titlecolor': '#111827',
+    'axes.titleweight': 'semibold',
+    'axes.spines.top': False,
+    'axes.spines.right': False,
+    'xtick.color': '#6b7280',
+    'ytick.color': '#6b7280',
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'grid.color': '#e5e7eb',
+    'grid.linewidth': 0.7,
+    'grid.alpha': 1.0,
+    'legend.facecolor': '#ffffff',
+    'legend.edgecolor': '#e2e8f0',
+    'legend.framealpha': 0.95,
+    'legend.fontsize': 9,
+    'legend.labelcolor': '#374151',
+    'figure.titlesize': 13,
+    'font.family': 'DejaVu Sans',
+    'lines.antialiased': True,
 })
 
 # ==============================================================================
 # PATHS
 # ==============================================================================
-SCRIPT_DIR    = Path(__file__).parent
+SCRIPT_DIR = Path(__file__).parent
 OUTPUT_FOLDER = SCRIPT_DIR / "Output"
 
 # ==============================================================================
@@ -75,6 +92,8 @@ VISUALIZATION_TARGET_POINTS = 5000
 # For spectrum visualization we want higher detail (100k points)
 # because frequency domain requires finer resolution
 SPECTRUM_TARGET_POINTS = 100000
+
+
 # ==============================================================================
 
 # ==============================================================================
@@ -94,6 +113,101 @@ def add_footer(window):
             padding: 2px 8px;
         }
     """)
+
+
+def create_progress_indicator(current_step):
+    """Create compact progress indicator showing pipeline steps
+
+    Args:
+        current_step: 0=Load, 1=Visualize, 2=Manual, 3=Fourier, 4=Filter
+
+    Returns:
+        QWidget with progress indicator
+    """
+    steps = [
+        ("📁", "Load"),
+        ("📊", "Visualize"),
+        ("✂️", "Remove"),
+        ("🔄", "Fourier"),
+        ("🎯", "Filter")
+    ]
+
+    widget = QWidget()
+    widget.setFixedHeight(45)
+    layout = QHBoxLayout(widget)
+    layout.setContentsMargins(20, 5, 20, 5)
+    layout.setSpacing(8)
+
+    layout.addStretch()
+
+    for i, (icon, name) in enumerate(steps):
+        step_container = QWidget()
+        step_container.setFixedSize(100, 32)
+        step_layout = QHBoxLayout(step_container)
+        step_layout.setContentsMargins(6, 4, 6, 4)
+        step_layout.setSpacing(4)
+
+        icon_label = QLabel(icon)
+        icon_label.setFixedSize(16, 16)
+        icon_label.setFont(QFont("Segoe UI", 9))
+        icon_label.setAlignment(Qt.AlignCenter)
+
+        text_label = QLabel(name)
+        text_label.setFont(QFont("Segoe UI", 9))
+        text_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        step_layout.addWidget(icon_label)
+        step_layout.addWidget(text_label)
+        step_layout.addStretch()
+
+        if i < current_step:
+            step_container.setStyleSheet("""
+                QWidget {
+                    background-color: #d1fae5;
+                    border: 1px solid #10b981;
+                    border-radius: 3px;
+                }
+                QLabel { color: #059669; font-weight: 600; }
+            """)
+        elif i == current_step:
+            step_container.setStyleSheet("""
+                QWidget {
+                    background-color: #dbeafe;
+                    border: 2px solid #3b82f6;
+                    border-radius: 3px;
+                }
+                QLabel { color: #2563eb; font-weight: 700; }
+            """)
+        else:
+            step_container.setStyleSheet("""
+                QWidget {
+                    background-color: #f9fafb;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 3px;
+                }
+                QLabel { color: #9ca3af; font-weight: 400; }
+            """)
+
+        layout.addWidget(step_container)
+
+        if i < len(steps) - 1:
+            arrow = QLabel("›")
+            arrow.setFixedWidth(12)
+            arrow.setFont(QFont("Segoe UI", 14, QFont.Bold))
+            arrow.setStyleSheet("color: #d1d5db;")
+            arrow.setAlignment(Qt.AlignCenter)
+            layout.addWidget(arrow)
+
+    layout.addStretch()
+
+    widget.setStyleSheet("""
+        QWidget {
+            background-color: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+    """)
+
+    return widget
 
 
 def read_sensor_freq_from_csv(csv_path, default=None):
@@ -160,7 +274,7 @@ class ProcessingThread(QThread):
 
                 # Update progress
                 progress_pct = 10 + int((i + 1) / len(self.data_files) * 30)
-                self.progress.emit(progress_pct, f"Loaded {i+1}/{len(self.data_files)}")
+                self.progress.emit(progress_pct, f"Loaded {i + 1}/{len(self.data_files)}")
 
             if self.should_stop:
                 return
@@ -255,7 +369,7 @@ class ProcessingThread(QThread):
                 with open(self.info_file, 'r', encoding=encoding, errors='ignore') as f:
                     content = f.read()
                 freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
-                          or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
+                             or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
                 if freq_match:
                     sensor_frequency = int(freq_match.group(1))
                     break  # Found — stop trying encodings
@@ -288,9 +402,9 @@ class ProcessingThread(QThread):
                     continue
 
         return {
-            'date_start':       date_start,
-            'date_end':         date_end,
-            'dt_start':         dt_start,
+            'date_start': date_start,
+            'date_end': date_end,
+            'dt_start': dt_start,
             'sensor_frequency': sensor_frequency,
         }
 
@@ -354,7 +468,8 @@ class FileDropZone(QLabel):
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-            self.setStyleSheet(self.styleSheet().replace('#f8fafc', '#f0fdf4').replace('dashed #cbd5e1', 'solid #4ade80'))
+            self.setStyleSheet(
+                self.styleSheet().replace('#f8fafc', '#f0fdf4').replace('dashed #cbd5e1', 'solid #4ade80'))
 
     def dragLeaveEvent(self, event):
         self.setStyleSheet(self.styleSheet().replace('#f0fdf4', '#f8fafc').replace('solid #4ade80', 'dashed #cbd5e1'))
@@ -419,7 +534,8 @@ class ProgressDialog(QDialog):
         # Status message
         self.status_label = QLabel("Starting...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("color: #6b7280; padding: 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
+        self.status_label.setStyleSheet(
+            "color: #6b7280; padding: 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.status_label)
 
         # Log window
@@ -474,7 +590,8 @@ class MainWindow(QMainWindow):
         # Instruction
         instruction = QLabel("Load metadata and data files to begin processing")
         instruction.setAlignment(Qt.AlignCenter)
-        instruction.setStyleSheet("color: #9ca3af; font-size: 13px; padding-bottom: 16px; font-family: 'Segoe UI', sans-serif;")
+        instruction.setStyleSheet(
+            "color: #9ca3af; font-size: 13px; padding-bottom: 16px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(instruction)
 
         # INFO file section
@@ -518,16 +635,19 @@ class MainWindow(QMainWindow):
         # Status
         self.status_label = QLabel("Waiting for files...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("color: #9ca3af; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
+        self.status_label.setStyleSheet(
+            "color: #9ca3af; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
         layout.addWidget(self.status_label)
 
         layout.addStretch()
 
         self.apply_global_styles()
 
+        # Add footer BEFORE showing window
         add_footer(self)
-        self.showMaximized()
 
+        # Show maximized AFTER UI is fully built
+        self.showMaximized()
 
     def create_info_section(self):
         """Section for INFO file"""
@@ -558,7 +678,8 @@ class MainWindow(QMainWindow):
 
         # Info about loaded file
         self.info_label = QLabel("No file loaded")
-        self.info_label.setStyleSheet("color: #9ca3af; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
+        self.info_label.setStyleSheet(
+            "color: #9ca3af; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.info_label)
 
         group.setLayout(layout)
@@ -620,7 +741,8 @@ class MainWindow(QMainWindow):
 
         # File counter
         self.data_count_label = QLabel("Files loaded: 0")
-        self.data_count_label.setStyleSheet("color: #9ca3af; padding: 4px 6px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
+        self.data_count_label.setStyleSheet(
+            "color: #9ca3af; padding: 4px 6px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.data_count_label)
 
         group.setLayout(layout)
@@ -684,7 +806,8 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             self.info_label.setText(f"Loaded: {filename}\n⚠  Parse error: {str(e)}")
-            self.info_label.setStyleSheet("color: #d97706; font-weight: 600; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
+            self.info_label.setStyleSheet(
+                "color: #d97706; font-weight: 600; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
 
         self.btn_clear_info.setEnabled(True)
         self.update_status()
@@ -699,7 +822,7 @@ class MainWindow(QMainWindow):
                 with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
                     content = f.read()
                 freq_match = re.search(r'[Чч]астота\s+опроса[^:]*:\s*(\d+)', content) \
-                          or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
+                             or re.search(r'[Ff]requency[^:]*:\s*(\d+)', content)
                 if freq_match:
                     sensor_frequency = int(freq_match.group(1))
                     break  # Found — stop trying encodings
@@ -733,10 +856,10 @@ class MainWindow(QMainWindow):
         if dt_start and dt_end:
             delta = dt_end - dt_start
             total_s = int(delta.total_seconds())
-            days    = delta.days
-            hours   = (total_s % 86400) // 3600
-            mins    = (total_s % 3600)  // 60
-            secs    = total_s % 60
+            days = delta.days
+            hours = (total_s % 86400) // 3600
+            mins = (total_s % 3600) // 60
+            secs = total_s % 60
             recording_duration = (
                 f"{days}d {hours:02d}h {mins:02d}m {secs:02d}s"
                 if days > 0 else
@@ -748,11 +871,11 @@ class MainWindow(QMainWindow):
         total_measurements = int(meas_match.group(1)) if meas_match else None
 
         return {
-            'sensor_frequency':   sensor_frequency,
-            'dt_start':           dt_start,
-            'dt_end':             dt_end,
-            'date_start':         dt_start.date() if dt_start else None,
-            'date_end':           dt_end.date()   if dt_end   else None,
+            'sensor_frequency': sensor_frequency,
+            'dt_start': dt_start,
+            'dt_end': dt_end,
+            'date_start': dt_start.date() if dt_start else None,
+            'date_end': dt_end.date() if dt_end else None,
             'recording_duration': recording_duration,
             'total_measurements': total_measurements,
         }
@@ -782,7 +905,8 @@ class MainWindow(QMainWindow):
         """Clear INFO file"""
         self.info_file = None
         self.info_label.setText("No file loaded")
-        self.info_label.setStyleSheet("color: #ef4444; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
+        self.info_label.setStyleSheet(
+            "color: #ef4444; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         self.btn_clear_info.setEnabled(False)
         self.update_status()
 
@@ -798,19 +922,23 @@ class MainWindow(QMainWindow):
         """Update status and continue button availability"""
         if self.info_file and self.data_files:
             self.status_label.setText(f"Ready to process — INFO + {len(self.data_files)} data files loaded")
-            self.status_label.setStyleSheet("color: #16a34a; font-weight: 600; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
+            self.status_label.setStyleSheet(
+                "color: #16a34a; font-weight: 600; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(True)
         elif self.info_file:
             self.status_label.setText("Load data files to continue")
-            self.status_label.setStyleSheet("color: #d97706; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
+            self.status_label.setStyleSheet(
+                "color: #d97706; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(False)
         elif self.data_files:
             self.status_label.setText("Load INFO file to continue")
-            self.status_label.setStyleSheet("color: #d97706; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
+            self.status_label.setStyleSheet(
+                "color: #d97706; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(False)
         else:
             self.status_label.setText("Waiting for files...")
-            self.status_label.setStyleSheet("color: #9ca3af; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
+            self.status_label.setStyleSheet(
+                "color: #9ca3af; padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px;")
             self.btn_continue.setEnabled(False)
 
     def on_continue(self):
@@ -1055,6 +1183,10 @@ class VisualizationWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
+        # Progress indicator
+        progress = create_progress_indicator(current_step=1)
+        layout.addWidget(progress)
+
         # Header
         header = QLabel("Raw Data Visualization")
         header.setFont(QFont("Segoe UI", 17, QFont.Bold))
@@ -1064,7 +1196,7 @@ class VisualizationWindow(QMainWindow):
 
         # Info label
         info_text = (f"Readings: {self.data_df['reading_number'].max()} | "
-                    f"Frequency: {self.data_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz")
+                     f"Frequency: {self.data_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz")
         info_label = QLabel(info_text)
         info_label.setAlignment(Qt.AlignCenter)
         info_label.setStyleSheet("color: #6b7280; font-size: 12px; padding: 4px; font-family: 'Consolas', monospace;")
@@ -1103,7 +1235,7 @@ class VisualizationWindow(QMainWindow):
         self.btn_skip.clicked.connect(self.on_skip_removal)
         btn_layout.addWidget(self.btn_skip)
 
-        self.btn_manual = QPushButton("✏  Proceed with Manual Data Removal")
+        self.btn_manual = QPushButton("✂️  Proceed with Manual Data Removal")
         self.btn_manual.setStyleSheet("""
             QPushButton {
                 background-color: #0ea5e9;
@@ -1179,7 +1311,9 @@ class VisualizationWindow(QMainWindow):
 
         # FIRST: Draw complete blue line (no gaps)
         ax.plot(timestamps, surface_displacement,
-               linewidth=0.5, color='#3b82f6', alpha=0.7, label='Wave data', zorder=1)
+                linewidth=0.5, color=COLORS['wave_data'], alpha=0.7, label='Wave data',
+                marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'],
+                markeredgewidth=0, zorder=2)
 
         # SECOND: Overlay red segments on top (no connecting lines between segments)
         if dive_mask.sum() > 0:
@@ -1188,20 +1322,22 @@ class VisualizationWindow(QMainWindow):
             # Vectorised segment extraction: find index gaps > 1
             breaks = np.where(np.diff(dive_indices) > 1)[0]
             starts = np.concatenate([[dive_indices[0]], dive_indices[breaks + 1]])
-            ends   = np.concatenate([dive_indices[breaks], [dive_indices[-1]]])
+            ends = np.concatenate([dive_indices[breaks], [dive_indices[-1]]])
             segments = list(zip(starts, ends))
 
             # Plot each segment separately (prevents connecting lines)
             for i, (start, end) in enumerate(segments):
                 label = 'Sensor deployment/retrieval' if i == 0 else None
-                ax.plot(timestamps[start:end+1], surface_displacement[start:end+1],
-                       linewidth=1.0, color='#f43f5e', alpha=0.9, label=label, zorder=2)
+                ax.plot(timestamps[start:end + 1], surface_displacement[start:end + 1],
+                        linewidth=1.0, color=COLORS['dive_detect'], alpha=0.9, label=label,
+                        marker='o', markersize=1.5, markerfacecolor=COLORS['dive_detect'],
+                        markeredgewidth=0, zorder=3)
 
         ax.set_xlabel('Date', fontsize=12)
         ax.set_ylabel('Surface displacement (meters)', fontsize=12)
         ax.set_title(f'Raw Data - sensor deployment and/or retrieval will be automatically detected',
-                    fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
+                     fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, zorder=0)
         ax.legend(loc='upper right')
 
         # Format x-axis with dates
@@ -1250,10 +1386,10 @@ class VisualizationWindow(QMainWindow):
         if n < 100:
             return dive_mask
 
-        gradient     = np.gradient(surface_displacement)
+        gradient = np.gradient(surface_displacement)
         gradient_abs = np.abs(gradient)
-        grad_std     = np.std(gradient)
-        threshold    = sensitivity * grad_std
+        grad_std = np.std(gradient)
+        threshold = sensitivity * grad_std
 
         # ── BEGINNING LEG ──────────────────────────────────────────────────
         if surface_displacement[0] < 2.0:
@@ -1264,7 +1400,7 @@ class VisualizationWindow(QMainWindow):
             for i in range(1, search_end):
                 if gradient[i] > threshold:
                     p_before = surface_displacement[i - 1]
-                    p_after  = surface_displacement[min(i + 1, n - 1)]
+                    p_after = surface_displacement[min(i + 1, n - 1)]
                     # Must be a genuine air→water crossing
                     if p_before < 2.0 and p_after >= 2.0:
                         jump_indices.append(i)
@@ -1293,7 +1429,7 @@ class VisualizationWindow(QMainWindow):
             for i in range(search_start + 1, n):
                 if gradient[i] < -threshold:
                     p_before = surface_displacement[i - 1]
-                    p_after  = surface_displacement[min(i + 1, n - 1)]
+                    p_after = surface_displacement[min(i + 1, n - 1)]
                     # Must be a genuine water→air crossing
                     if p_before >= 2.0 and p_after < 2.0:
                         drop_indices.append(i)
@@ -1314,7 +1450,6 @@ class VisualizationWindow(QMainWindow):
                 dive_mask[leg_start:] = True
 
         return dive_mask
-
 
     def _update_manual_btn_state(self):
         """Enable btn_manual only if dive detector found at least one leg.
@@ -1402,19 +1537,27 @@ class VisualizationWindow(QMainWindow):
 
     def build_full_data_step1(self):
         """Load and plot full Step1 data in new window"""
-        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
-        progress.setModal(True); progress.setFixedSize(400, 100)
-        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step1_TXTtoCSV.csv...'))
-        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
-        progress.show(); QApplication.processEvents()
+        progress = QDialog(self);
+        progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True);
+        progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress);
+        _l.addWidget(QLabel('Loading Step1_TXTtoCSV.csv...'))
+        pb = QProgressBar();
+        pb.setRange(0, 0);
+        _l.addWidget(pb)
+        progress.show();
+        QApplication.processEvents()
         try:
             df = pd.read_csv(OUTPUT_FOLDER / 'Step1_TXTtoCSV.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 1: Full Raw Data')
-            self._full_window = _w; _w.show()
+            self._full_window = _w;
+            _w.show()
         except Exception as e:
-            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
+            progress.close();
+            QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
     def apply_styles(self):
         """Apply global styles"""
@@ -1448,7 +1591,8 @@ class ManualRemovalWindow(QMainWindow):
     def __init__(self, viz_data_df):
         super().__init__()
         self.viz_data_df = viz_data_df  # Subsampled visualization data
-        self.cut_timestamps = {'beginning': None, 'ending': None}  # Store cut timestamps (work for both viz and full data)
+        self.cut_timestamps = {'beginning': None,
+                               'ending': None}  # Store cut timestamps (work for both viz and full data)
         self.cut_lines = {}  # Store cut line references for each graph
         self.shaded_regions = {}  # Store shaded region references
         self.init_ui()
@@ -1466,6 +1610,10 @@ class ManualRemovalWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
+        # Progress indicator
+        progress = create_progress_indicator(current_step=2)
+        layout.addWidget(progress)
+
         # Header
         header = QLabel("Manual Dive Section Removal")
         header.setFont(QFont("Segoe UI", 17, QFont.Bold))
@@ -1480,7 +1628,8 @@ class ManualRemovalWindow(QMainWindow):
             "Retrieval: removes everything AFTER double-click."
         )
         instructions.setAlignment(Qt.AlignCenter)
-        instructions.setStyleSheet("color: #6b7280; font-size: 12px; padding: 4px; font-family: 'Segoe UI', sans-serif;")
+        instructions.setStyleSheet(
+            "color: #6b7280; font-size: 12px; padding: 4px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(instructions)
 
         # Detect dives on visualization data
@@ -1585,14 +1734,14 @@ class ManualRemovalWindow(QMainWindow):
                 margin = int((end - start) * 0.1)
                 end = min(end + margin, len(surface_displacement_viz) - 1)
                 self.beginning_viz_range = (start, end)
-                self.beginning_data = self.viz_data_df.iloc[start:end+1].copy()
+                self.beginning_data = self.viz_data_df.iloc[start:end + 1].copy()
 
             if self.ending_viz_range:
                 start, end = self.ending_viz_range
                 margin = int((end - start) * 0.1)
                 start = max(start - margin, 0)
                 self.ending_viz_range = (start, end)
-                self.ending_data = self.viz_data_df.iloc[start:end+1].copy()
+                self.ending_data = self.viz_data_df.iloc[start:end + 1].copy()
 
     def detect_dives(self, surface_displacement, sensitivity=3.0):
         """
@@ -1613,10 +1762,10 @@ class ManualRemovalWindow(QMainWindow):
         if n < 100:
             return dive_mask
 
-        gradient     = np.gradient(surface_displacement)
+        gradient = np.gradient(surface_displacement)
         gradient_abs = np.abs(gradient)
-        grad_std     = np.std(gradient)
-        threshold    = sensitivity * grad_std
+        grad_std = np.std(gradient)
+        threshold = sensitivity * grad_std
 
         # ── BEGINNING LEG ──────────────────────────────────────────────────
         if surface_displacement[0] < 2.0:
@@ -1626,7 +1775,7 @@ class ManualRemovalWindow(QMainWindow):
             for i in range(1, search_end):
                 if gradient[i] > threshold:
                     p_before = surface_displacement[i - 1]
-                    p_after  = surface_displacement[min(i + 1, n - 1)]
+                    p_after = surface_displacement[min(i + 1, n - 1)]
                     if p_before < 2.0 and p_after >= 2.0:
                         jump_indices.append(i)
 
@@ -1650,7 +1799,7 @@ class ManualRemovalWindow(QMainWindow):
             for i in range(search_start + 1, n):
                 if gradient[i] < -threshold:
                     p_before = surface_displacement[i - 1]
-                    p_after  = surface_displacement[min(i + 1, n - 1)]
+                    p_after = surface_displacement[min(i + 1, n - 1)]
                     if p_before >= 2.0 and p_after < 2.0:
                         drop_indices.append(i)
 
@@ -1683,23 +1832,28 @@ class ManualRemovalWindow(QMainWindow):
         full_surface_displacement = self.viz_data_df['surface_displacement'].values
 
         # Plot complete data
-        ax.plot(full_timestamps, full_surface_displacement, linewidth=0.5, color='#3b82f6', alpha=0.7)
+        ax.plot(full_timestamps, full_surface_displacement, linewidth=0.5, color=COLORS['wave_data'], alpha=0.7,
+                marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
 
         # Highlight the detected dive section in red
         if leg_type == 'beginning' and self.beginning_viz_range:
             start, end = self.beginning_viz_range
-            dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
-            dive_surface_displacement = full_surface_displacement[start:end+1]
-            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#f43f5e', alpha=0.9, label='Detected dive')
+            dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end + 1]
+            dive_surface_displacement = full_surface_displacement[start:end + 1]
+            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color=COLORS['dive_detect'], alpha=0.9,
+                    label='Detected dive',
+                    marker='o', markersize=1.5, markerfacecolor=COLORS['dive_detect'], markeredgewidth=0, zorder=3)
         elif leg_type == 'ending' and self.ending_viz_range:
             start, end = self.ending_viz_range
-            dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end+1]
-            dive_surface_displacement = full_surface_displacement[start:end+1]
-            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color='#f43f5e', alpha=0.9, label='Detected dive')
+            dive_timestamps = self.viz_data_df['timestamp'].iloc[start:end + 1]
+            dive_surface_displacement = full_surface_displacement[start:end + 1]
+            ax.plot(dive_timestamps, dive_surface_displacement, linewidth=0.8, color=COLORS['dive_detect'], alpha=0.9,
+                    label='Detected dive',
+                    marker='o', markersize=1.5, markerfacecolor=COLORS['dive_detect'], markeredgewidth=0, zorder=3)
 
         # No axis labels, only tick values
         ax.set_title(title, fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, zorder=0)
         ax.legend(loc='upper right', fontsize=9)
 
         # Format dates - horizontal, no rotation
@@ -1750,7 +1904,7 @@ class ManualRemovalWindow(QMainWindow):
 
                 # Draw vertical line at double-click position
                 self.cut_lines[leg_type] = ax.axvline(
-                    event.xdata, color='#10b981', linewidth=2,
+                    event.xdata, color=COLORS['filtered'], linewidth=2,
                     linestyle='--', label='Cut point', zorder=10
                 )
 
@@ -1799,7 +1953,7 @@ class ManualRemovalWindow(QMainWindow):
             try:
                 df_full = pd.read_csv(full_file, comment='#')
                 df_full['timestamp'] = pd.to_datetime(df_full['timestamp'], errors='coerce')
-                ts  = df_full['timestamp']
+                ts = df_full['timestamp']
                 prs = df_full['surface_displacement'].values
 
                 # Remember current view state before clearing
@@ -1826,28 +1980,35 @@ class ManualRemovalWindow(QMainWindow):
                 _ax.cla()
 
                 # Draw full (non-subsampled) data
-                _ax.plot(ts, prs, linewidth=0.3, color='#3b82f6', alpha=0.8)
+                _ax.plot(ts, prs, linewidth=0.3, color=COLORS['wave_data'], alpha=0.8,
+                         marker='o', markersize=1.2, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
 
                 # Re-draw dive highlight
                 if _lt == 'beginning' and self.beginning_viz_range:
                     s, e = self.beginning_viz_range
                     viz_ts = self.viz_data_df['timestamp']
-                    t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
+                    t0 = viz_ts.iloc[s];
+                    t1 = viz_ts.iloc[e]
                     mask = (ts >= t0) & (ts <= t1)
                     _ax.plot(ts[mask], prs[mask], linewidth=0.6,
-                             color='#f43f5e', alpha=0.9, label='Detected dive')
+                             color=COLORS['dive_detect'], alpha=0.9, label='Detected dive',
+                             marker='o', markersize=1.2, markerfacecolor=COLORS['dive_detect'], markeredgewidth=0,
+                             zorder=3)
                 elif _lt == 'ending' and self.ending_viz_range:
                     s, e = self.ending_viz_range
                     viz_ts = self.viz_data_df['timestamp']
-                    t0 = viz_ts.iloc[s]; t1 = viz_ts.iloc[e]
+                    t0 = viz_ts.iloc[s];
+                    t1 = viz_ts.iloc[e]
                     mask = (ts >= t0) & (ts <= t1)
                     _ax.plot(ts[mask], prs[mask], linewidth=0.6,
-                             color='#f43f5e', alpha=0.9, label='Detected dive')
+                             color=COLORS['dive_detect'], alpha=0.9, label='Detected dive',
+                             marker='o', markersize=1.2, markerfacecolor=COLORS['dive_detect'], markeredgewidth=0,
+                             zorder=3)
 
                 # Restore user's cut line and shading if they had set one
                 if saved_cut_line_x is not None:
                     self.cut_lines[_lt] = _ax.axvline(
-                        saved_cut_line_x, color='#10b981', linewidth=2,
+                        saved_cut_line_x, color=COLORS['filtered'], linewidth=2,
                         linestyle='--', label='Cut point', zorder=10
                     )
                 if saved_shading is not None:
@@ -1860,7 +2021,7 @@ class ManualRemovalWindow(QMainWindow):
                 # Restore formatting
                 import matplotlib.dates as _mdates2
                 _ax.xaxis.set_major_formatter(_mdates2.DateFormatter('%d-%m %H:%M'))
-                _ax.grid(True, alpha=0.3)
+                _ax.grid(True, alpha=0.3, zorder=0)
                 _ax.legend(loc='upper right', fontsize=9)
                 _ax.set_title(
                     f'{cur_title} — {len(prs):,} pts (full resolution)',
@@ -1947,7 +2108,7 @@ class ManualRemovalWindow(QMainWindow):
                 pos = max(0, min(pos, len(_ts_array) - 1))
                 if pos > 0:
                     d_prev = abs((_ts_array[pos - 1] - needle).astype('int64'))
-                    d_curr = abs((_ts_array[pos]     - needle).astype('int64'))
+                    d_curr = abs((_ts_array[pos] - needle).astype('int64'))
                     if d_prev < d_curr:
                         pos -= 1
                 return pos
@@ -2052,19 +2213,27 @@ class ManualRemovalWindow(QMainWindow):
 
     def build_full_data_step2(self):
         """Load and plot full Step2 data in new window"""
-        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
-        progress.setModal(True); progress.setFixedSize(400, 100)
-        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step2_Initial_Cut.csv...'))
-        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
-        progress.show(); QApplication.processEvents()
+        progress = QDialog(self);
+        progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True);
+        progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress);
+        _l.addWidget(QLabel('Loading Step2_Initial_Cut.csv...'))
+        pb = QProgressBar();
+        pb.setRange(0, 0);
+        _l.addWidget(pb)
+        progress.show();
+        QApplication.processEvents()
         try:
             df = pd.read_csv(OUTPUT_FOLDER / 'Step2_Initial_Cut.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 2: Full Initial Cut Data')
-            self._full_window = _w; _w.show()
+            self._full_window = _w;
+            _w.show()
         except Exception as e:
-            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
+            progress.close();
+            QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
     def apply_styles(self):
         """Apply global styles"""
@@ -2113,10 +2282,10 @@ class Step3FourierWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.spectrum_full    = None   # complex FFT — for apply_transform
+        self.spectrum_full = None  # complex FFT — for apply_transform
         self.frequencies_full = None
-        self.cutoff_freq      = None
-        self.data_step2       = None   # cached Step2_Zero_Mean DataFrame (timestamps + reading_number)
+        self.cutoff_freq = None
+        self.data_step2 = None  # cached Step2_Zero_Mean DataFrame (timestamps + reading_number)
         self.init_ui()
         self.load_and_transform()
 
@@ -2128,6 +2297,10 @@ class Step3FourierWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+
+        # Progress indicator
+        progress = create_progress_indicator(current_step=3)
+        layout.addWidget(progress)
 
         # ── Top bar: spectrogram parameters + button ─────────────────────
         # Outer container with card-style background
@@ -2295,7 +2468,7 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             spectrum_df = pd.read_csv(step3_spectrum_viz, comment='#')
-            self.frequencies_viz   = spectrum_df['frequency'].values
+            self.frequencies_viz = spectrum_df['frequency'].values
             self.spectrum_viz_real = spectrum_df['real'].values
             self.spectrum_viz_imag = spectrum_df['imag'].values
 
@@ -2306,7 +2479,7 @@ class Step3FourierWindow(QMainWindow):
             # Load full spectrum
             spectrum_full_df = pd.read_csv(step3_spectrum, comment='#')
             self.frequencies_full = spectrum_full_df['frequency'].values
-            self.spectrum_full    = spectrum_full_df['real'].values + 1j * spectrum_full_df['imag'].values
+            self.spectrum_full = spectrum_full_df['real'].values + 1j * spectrum_full_df['imag'].values
 
             progress_bar.setValue(90)
             status.setText("Creating plot...")
@@ -2394,7 +2567,7 @@ class Step3FourierWindow(QMainWindow):
 
             spectrum_df.to_csv(step3_spectrum, mode='a', index=False)
 
-            self.spectrum_full    = s   # complex FFT — used by apply_transform
+            self.spectrum_full = s  # complex FFT — used by apply_transform
             self.frequencies_full = x
 
             progress_bar.setValue(75)
@@ -2428,7 +2601,7 @@ class Step3FourierWindow(QMainWindow):
 
             viz_df.to_csv(step3_spectrum_viz, mode='a', index=False)
 
-            self.frequencies_viz   = x_viz
+            self.frequencies_viz = x_viz
             self.spectrum_viz_real = s_viz.real
             self.spectrum_viz_imag = s_viz.imag
 
@@ -2468,17 +2641,17 @@ class Step3FourierWindow(QMainWindow):
         # Top graph: subsampled, ω > 0.1 (exclude DC and large low-freq harmonics)
         pos_viz = self.frequencies_viz > 0.1
         freq_viz = self.frequencies_viz[pos_viz]
-        mag_viz  = np.sqrt(self.spectrum_viz_real[pos_viz]**2 + self.spectrum_viz_imag[pos_viz]**2)
-        s_viz    = (mag_viz**2) / ((N / 2) * omega_max)
+        mag_viz = np.sqrt(self.spectrum_viz_real[pos_viz] ** 2 + self.spectrum_viz_imag[pos_viz] ** 2)
+        s_viz = (mag_viz ** 2) / ((N / 2) * omega_max)
 
         # Bottom graph: full resolution, 0 < ω ≤ 0.1
         pos_full = self.frequencies_full >= 0
         freq_full = self.frequencies_full[pos_full]
-        mag_full  = np.sqrt(self.spectrum_full.real[pos_full]**2 + self.spectrum_full.imag[pos_full]**2)
-        s_full    = (mag_full**2) / ((N / 2) * omega_max)
-        zoom_idx  = (freq_full > 0) & (freq_full <= 0.1)
+        mag_full = np.sqrt(self.spectrum_full.real[pos_full] ** 2 + self.spectrum_full.imag[pos_full] ** 2)
+        s_full = (mag_full ** 2) / ((N / 2) * omega_max)
+        zoom_idx = (freq_full > 0) & (freq_full <= 0.1)
         freq_zoom = freq_full[zoom_idx]
-        s_zoom    = s_full[zoom_idx]
+        s_zoom = s_full[zoom_idx]
 
         # ==============================================================================
         # TOP GRAPH: overview, ω ∈ [0, 3]
@@ -2487,10 +2660,10 @@ class Step3FourierWindow(QMainWindow):
         canvas_top = FigureCanvas(fig_top)
         ax_top = fig_top.add_subplot(111)
 
-        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color='#10b981', alpha=0.9)
+        ax_top.plot(freq_viz, s_viz, linewidth=0.8, color=COLORS['spectrum'], alpha=0.9, zorder=2)
         ax_top.set_xlabel('ω, [rad/s]', fontsize=11)
         ax_top.set_ylabel('S(ω), [m²/s]', fontsize=11)
-        ax_top.grid(True, alpha=0.3)
+        ax_top.grid(True, alpha=0.3, zorder=0)
         ax_top.set_xlim(0, 3.0)
         ax_top.set_ylim(0, None)
 
@@ -2507,11 +2680,11 @@ class Step3FourierWindow(QMainWindow):
         canvas_bottom = FigureCanvas(fig_bottom)
         ax_bottom = fig_bottom.add_subplot(111)
 
-        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color='#10b981', alpha=0.9)
+        ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color=COLORS['spectrum'], alpha=0.9, zorder=2)
         ax_bottom.set_xlabel('ω, [rad/s]', fontsize=11)
         ax_bottom.set_ylabel('S(ω), [m²/s]', fontsize=11)
         ax_bottom.set_xlim(0, 0.1)
-        ax_bottom.grid(True, alpha=0.3, which='both')
+        ax_bottom.grid(True, alpha=0.3, which='both', zorder=0)
         # Log scale — set AFTER plot so matplotlib auto-sets ylim from data (no warning)
         ax_bottom.set_yscale('log')
 
@@ -2560,14 +2733,14 @@ class Step3FourierWindow(QMainWindow):
                 # Add text annotation to BOTTOM graph (upper right corner)
                 cutoff_text = f"Cut-off > {period_minutes} min {period_secs} sec"
                 self.cutoff_text = ax_bottom.text(0.98, 0.95, cutoff_text,
-                                               transform=ax_bottom.transAxes,
-                                               fontsize=12,
-                                               verticalalignment='top',
-                                               horizontalalignment='right',
-                                               bbox=dict(boxstyle='round',
-                                                        facecolor='white',
-                                                        edgecolor='black',
-                                                        alpha=0.9))
+                                                  transform=ax_bottom.transAxes,
+                                                  fontsize=12,
+                                                  verticalalignment='top',
+                                                  horizontalalignment='right',
+                                                  bbox=dict(boxstyle='round',
+                                                            facecolor='white',
+                                                            edgecolor='black',
+                                                            alpha=0.9))
 
                 canvas_bottom.draw()
 
@@ -2575,7 +2748,8 @@ class Step3FourierWindow(QMainWindow):
                 self.cutoff_freq = clicked_omega
                 self.btn_continue.setEnabled(True)
 
-                print(f"Cutoff frequency set to: {self.cutoff_freq:.4f} rad/s (Period: {period_minutes} min {period_secs} sec)")
+                print(
+                    f"Cutoff frequency set to: {self.cutoff_freq:.4f} rad/s (Period: {period_minutes} min {period_secs} sec)")
 
         canvas_bottom.mpl_connect('button_press_event', on_click)
 
@@ -2696,7 +2870,8 @@ class Step3FourierWindow(QMainWindow):
                 f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
                 f.write(f"# Cutoff frequency: {self.cutoff_freq:.6f} rad/s\n")
                 f.write(f"# Original readings: {len(reading_numbers)}\n")
-                f.write(f"# Readings after edge removal: {len(readings_to_keep) if len(reading_numbers) > 4 else len(reading_numbers)}\n")
+                f.write(
+                    f"# Readings after edge removal: {len(readings_to_keep) if len(reading_numbers) > 4 else len(reading_numbers)}\n")
                 f.write(f"# First 2 and last 2 readings removed\n")
                 f.write(f"# Total points: {len(data_transformed)}\n")
                 f.write("# ==========================================\n")
@@ -2788,9 +2963,9 @@ class Step3FourierWindow(QMainWindow):
             y = data['surface_displacement'].values
 
             # Parameters from UI spinboxes
-            WindowSize = self.spin_window.value()   # minutes
-            DeltaWindow = self.spin_delta.value()   # seconds
-            part = self.spin_part.value()            # percent of spectrum to keep
+            WindowSize = self.spin_window.value()  # minutes
+            DeltaWindow = self.spin_delta.value()  # seconds
+            part = self.spin_part.value()  # percent of spectrum to keep
             Sensor_Frequency = read_sensor_freq_from_csv(step2_file)
 
             progress_bar.setValue(20)
@@ -2809,8 +2984,8 @@ class Step3FourierWindow(QMainWindow):
             w = rfftfreq(window, (1 / Sensor_Frequency) / (2 * np.pi))
             # Number of spectrum points to keep (slice [0:spec_len] is always valid)
             # spec_idx is used only for w[spec_idx] — must be < len(w)
-            spec_len = int(len(w) * 0.01 * part)          # equals len(w) when part=100
-            spec_idx = min(spec_len, len(w) - 1)           # safe index for w[] — never out of bounds
+            spec_len = int(len(w) * 0.01 * part)  # equals len(w) when part=100
+            spec_idx = min(spec_len, len(w) - 1)  # safe index for w[] — never out of bounds
             z = []
 
             progress_bar.setValue(30)
@@ -2823,12 +2998,12 @@ class Step3FourierWindow(QMainWindow):
                 if i % 10 == 0:
                     progress_pct = 30 + int((i / n) * 60)
                     progress_bar.setValue(progress_pct)
-                    status.setText(f"Processing window {i+1}/{n}...")
+                    status.setText(f"Processing window {i + 1}/{n}...")
                     QApplication.processEvents()
 
                 # Extract window — offset in samples = window index × shift_samples
                 shift_samples = DeltaWindow * Sensor_Frequency
-                arr = y[i * shift_samples : window + i * shift_samples]
+                arr = y[i * shift_samples: window + i * shift_samples]
 
                 # Apply Hann window
                 mask = hann(len(arr))
@@ -2881,7 +3056,7 @@ class Step3FourierWindow(QMainWindow):
         img = ax.imshow(
             np.flip(np.flip(z).T),
             extent=[0, WindowSize / 60 + n * DeltaWindow / 3600,
-                    0, w[spec_idx]],          # spec_idx = min(spec_len, len(w)-1)
+                    0, w[spec_idx]],  # spec_idx = min(spec_len, len(w)-1)
             cmap='gist_heat',
             vmin=-10,
             aspect='auto'
@@ -2964,17 +3139,19 @@ class Step3FourierWindow(QMainWindow):
 
         # Plot before (orange, more transparent per your request)
         ax.plot(data_before['timestamp'], data_before['surface_displacement'],
-               linewidth=0.5, color='#f97316', alpha=0.6, label='Before', zorder=1)
+                linewidth=0.5, color='#fb923c', alpha=0.6, label='Before',
+                marker='o', markersize=1.5, markerfacecolor='#fb923c', markeredgewidth=0, zorder=1)
 
         # Plot after (blue, less transparent per your request)
         ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['surface_displacement'],
-               linewidth=0.5, color='#3b82f6', alpha=0.7, label='After', zorder=2)
+                linewidth=0.5, color=COLORS['wave_data'], alpha=0.7, label='After',
+                marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
 
         # Horizontal line at y=0 (on top)
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=10)
 
         ax.set_title('Before/After Fourier Transform', fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, zorder=0)
         ax.legend(loc='upper right')
 
         # Format dates
@@ -3019,16 +3196,17 @@ class Step3FourierWindow(QMainWindow):
         """)
 
         def go_to_step4():
-            comparison_window.close()   # ends exec_() → returns below
+            comparison_window.close()  # ends exec_() → returns below
             # Defer Step4 creation to AFTER exec_() fully unwinds,
             # so the Qt event loop is clean before Step3 is destroyed.
             from PyQt5.QtCore import QTimer
             def _open_step4():
-                step3_ref = self   # keep Step3 alive a moment longer
+                step3_ref = self  # keep Step3 alive a moment longer
                 win = Step4ProcessingWindow()
                 QApplication.instance()._step4_window = win
                 win.show()
                 step3_ref.close()
+
             QTimer.singleShot(0, _open_step4)
 
         btn_continue.clicked.connect(go_to_step4)
@@ -3068,6 +3246,7 @@ class Step3FourierWindow(QMainWindow):
         """Show full spectrum in log scale (bottom graph toolbar button)."""
         self._build_full_spectrum(log_scale=True)
 
+
 class Step4ProcessingWindow(QMainWindow):
     """Window for Step 4: Spike removal and RMS filtering"""
 
@@ -3087,6 +3266,10 @@ class Step4ProcessingWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+
+        # Progress indicator
+        progress = create_progress_indicator(current_step=4)
+        layout.addWidget(progress)
 
         # Header
         header = QLabel("Step 4: Data Quality Processing")
@@ -3177,8 +3360,8 @@ class Step4ProcessingWindow(QMainWindow):
 
         for row in [
             _legend_item("#22c55e", "Processed recording", 'fill'),
-            _legend_item("#e74c3c", "Removed recording",   'fill'),
-            _legend_item("#e74c3c", "Spike",               'circle'),
+            _legend_item("#e74c3c", "Removed recording", 'fill'),
+            _legend_item("#e74c3c", "Spike", 'circle'),
         ]:
             legend_layout.addLayout(row)
         legend_layout.addStretch()
@@ -3304,7 +3487,8 @@ class Step4ProcessingWindow(QMainWindow):
         timestamps = data['timestamp']
         surface_displacement = data['surface_displacement'].values
 
-        ax.plot(timestamps, surface_displacement, linewidth=0.5, color='#3b82f6', alpha=0.7)
+        ax.plot(timestamps, surface_displacement, linewidth=0.5, color=COLORS['wave_data'], alpha=0.7,
+                marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
 
         # Add horizontal line at y=0 (thick black)
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=5)
@@ -3318,11 +3502,11 @@ class Step4ProcessingWindow(QMainWindow):
             if len(reading_data) > 0:
                 reading_start = reading_data['timestamp'].iloc[0]
                 ax.axvline(reading_start, color='gray', linestyle='--',
-                          linewidth=0.5, alpha=0.3)
+                           linewidth=0.5, alpha=0.3)
 
         ax.set_title('Step 3: Transformed Data (after Fourier Transform, with 20-min reading boundaries)',
-                    fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3)
+                     fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3, zorder=0)
 
         # Set x-axis limits to data boundaries (tight zoom)
         ax.set_xlim(timestamps.iloc[0], timestamps.iloc[-1])
@@ -3364,9 +3548,9 @@ class Step4ProcessingWindow(QMainWindow):
         parameters_file = output_folder / "Parameters.csv"
 
         # Get options
-        remove_spikes    = self.cb_remove_spikes.isChecked()
-        remove_low_rms   = self.cb_remove_low_rms.isChecked()
-        use_spline       = self.cb_spline.isChecked()
+        remove_spikes = self.cb_remove_spikes.isChecked()
+        remove_low_rms = self.cb_remove_low_rms.isChecked()
+        use_spline = self.cb_spline.isChecked()
         spline_target_hz = self.spline_freq_input.value()  # target Hz from spinbox
 
         # Parse RMS threshold
@@ -3384,18 +3568,18 @@ class Step4ProcessingWindow(QMainWindow):
             from scipy.optimize import fsolve
             import warnings
             g = 9.81
-            target = (4 * np.pi**2 * h) / (g * Tz**2)
+            target = (4 * np.pi ** 2 * h) / (g * Tz ** 2)
 
             def equation(x):
                 return x * np.tanh(x) - target
 
             # Adaptive initial guess based on target magnitude
             if target < 1.0:
-                x0 = target           # small target → solution near 0
+                x0 = target  # small target → solution near 0
             elif target < 10.0:
                 x0 = np.sqrt(target)  # moderate target
             else:
-                x0 = target           # large target → solution is large
+                x0 = target  # large target → solution is large
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -3430,24 +3614,24 @@ class Step4ProcessingWindow(QMainWindow):
             # Spectral moments
             m0 = np.trapezoid(s, dx=dx)
             m1 = np.trapezoid(w * s, dx=dx)
-            m2 = np.trapezoid((w**2) * s, dx=dx)
-            m4 = np.trapezoid((w**4) * s, dx=dx)
+            m2 = np.trapezoid((w ** 2) * s, dx=dx)
+            m4 = np.trapezoid((w ** 4) * s, dx=dx)
 
             if m0 == 0:
                 return 0, 0, 0, 0
 
             # Q (Goda parameter)
-            Q = np.trapezoid(w * s**2, dx=dx) / (m0**2)
+            Q = np.trapezoid(w * s ** 2, dx=dx) / (m0 ** 2)
 
             # nu (narrowness)
             if m1 != 0:
-                nu = np.sqrt(((m0 * m2) / (m1**2)) - 1)
+                nu = np.sqrt(((m0 * m2) / (m1 ** 2)) - 1)
             else:
                 nu = 0
 
             # eps_width
             if m0 * m4 != 0:
-                eps_width = np.sqrt(1 - (m2**2)/(m0 * m4))
+                eps_width = np.sqrt(1 - (m2 ** 2) / (m0 * m4))
             else:
                 eps_width = 0
 
@@ -3497,10 +3681,10 @@ class Step4ProcessingWindow(QMainWindow):
             """Calculate gamma function for BFI"""
             try:
                 v = 1 + (2 * kh) / (np.sinh(2 * kh))
-                a = -v**2 + 2 + 8 * (kh**2) * ((np.cosh(2 * kh)) / ((np.sinh(2 * kh))**2))
-                b = ((np.cosh(4 * kh) + 8 - 2 * (np.tanh(kh))**2) / (8 * (np.sinh(kh))**4) -
-                     ((2 * (np.cosh(kh))**2 + 0.5 * v)**2) /
-                     ((np.sinh(2 * kh))**2 * ((kh / (np.tanh(kh))) - (v / 2)**2)))
+                a = -v ** 2 + 2 + 8 * (kh ** 2) * ((np.cosh(2 * kh)) / ((np.sinh(2 * kh)) ** 2))
+                b = ((np.cosh(4 * kh) + 8 - 2 * (np.tanh(kh)) ** 2) / (8 * (np.sinh(kh)) ** 4) -
+                     ((2 * (np.cosh(kh)) ** 2 + 0.5 * v) ** 2) /
+                     ((np.sinh(2 * kh)) ** 2 * ((kh / (np.tanh(kh))) - (v / 2) ** 2)))
 
                 if a < 0:
                     print(f"Warning: a < 0 for kh={kh}")
@@ -3626,13 +3810,14 @@ class Step4ProcessingWindow(QMainWindow):
             for idx, reading_num in enumerate(reading_nums):
                 progress_pct = 10 + int((idx / total_readings) * 75)
                 progress_bar.setValue(progress_pct)
-                status.setText(f"Processing reading {reading_num} ({idx+1}/{total_readings})...")
+                status.setText(f"Processing reading {reading_num} ({idx + 1}/{total_readings})...")
 
                 if idx % 5 == 0:
                     QApplication.processEvents()
 
                 arr_data = reading_arrays[reading_num]
-                arr = arr_data['surface_displacement'].copy()  # .copy() required — arr is modified in-place during spike removal
+                arr = arr_data[
+                    'surface_displacement'].copy()  # .copy() required — arr is modified in-place during spike removal
                 arr_indices = arr_data['indices']
                 arr_timestamps = arr_data['timestamps']
                 reading_start = arr_data['start']
@@ -3642,7 +3827,7 @@ class Step4ProcessingWindow(QMainWindow):
 
                 # ========== STEP 1: CHECK RMS ==========
                 should_remove = False
-                rms_value = np.sqrt(np.mean(arr**2))
+                rms_value = np.sqrt(np.mean(arr ** 2))
 
                 if remove_low_rms and rms_value < rms_threshold:
                     should_remove = True
@@ -3695,17 +3880,17 @@ class Step4ProcessingWindow(QMainWindow):
                 # the original arr at sensor_freq.
                 if use_spline and spline_target_hz > sensor_freq:
                     from scipy.interpolate import CubicSpline
-                    n_orig   = len(arr)
-                    t_orig   = np.arange(n_orig) / sensor_freq          # seconds
-                    cs       = CubicSpline(t_orig, arr)
+                    n_orig = len(arr)
+                    t_orig = np.arange(n_orig) / sensor_freq  # seconds
+                    cs = CubicSpline(t_orig, arr)
                     # New time grid at target frequency
-                    t_new    = np.arange(0, t_orig[-1], 1.0 / spline_target_hz)
-                    arr_amp  = cs(t_new)                                # interpolated
+                    t_new = np.arange(0, t_orig[-1], 1.0 / spline_target_hz)
+                    arr_amp = cs(t_new)  # interpolated
                 else:
-                    arr_amp = arr                                        # same as original
+                    arr_amp = arr  # same as original
 
-                variance = np.var(arr)          # from ORIGINAL — for spectral params
-                sigma    = np.sqrt(np.var(arr_amp))   # from interpolated — for amplitudes
+                variance = np.var(arr)  # from ORIGINAL — for spectral params
+                sigma = np.sqrt(np.var(arr_amp))  # from interpolated — for amplitudes
                 As = 2 * sigma
                 Hs = 4 * sigma
 
@@ -3875,12 +4060,12 @@ class Step4ProcessingWindow(QMainWindow):
 
             # Show pipeline complete window
             stats = {
-                'total_readings':   total_readings,
-                'removed_rms':      len(removed_readings),
+                'total_readings': total_readings,
+                'removed_rms': len(removed_readings),
                 'spikes_corrected': len(spike_locations),
-                'remaining':        total_readings - len(removed_readings),
-                'mean_Hs':          mean_Hs,
-                'mean_Tz':          mean_Tz,
+                'remaining': total_readings - len(removed_readings),
+                'mean_Hs': mean_Hs,
+                'mean_Tz': mean_Tz,
             }
             _cw = PipelineCompleteWindow(output_folder, stats)
             QApplication.instance()._complete_window = _cw
@@ -3895,23 +4080,29 @@ class Step4ProcessingWindow(QMainWindow):
                 f"Processing failed:\n{str(e)}\n\n{traceback.format_exc()}"
             )
 
-
     def build_full_data_step3(self):
         """Load and plot full Step3 data in new window"""
-        progress = QDialog(self); progress.setWindowTitle('Loading Full Data')
-        progress.setModal(True); progress.setFixedSize(400, 100)
-        _l = QVBoxLayout(progress); _l.addWidget(QLabel('Loading Step3_Transformed.csv...'))
-        pb = QProgressBar(); pb.setRange(0,0); _l.addWidget(pb)
-        progress.show(); QApplication.processEvents()
+        progress = QDialog(self);
+        progress.setWindowTitle('Loading Full Data')
+        progress.setModal(True);
+        progress.setFixedSize(400, 100)
+        _l = QVBoxLayout(progress);
+        _l.addWidget(QLabel('Loading Step3_Transformed.csv...'))
+        pb = QProgressBar();
+        pb.setRange(0, 0);
+        _l.addWidget(pb)
+        progress.show();
+        QApplication.processEvents()
         try:
             df = pd.read_csv(OUTPUT_FOLDER / 'Step3_Transformed.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
             _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
-            self._full_window = _w; _w.show()
+            self._full_window = _w;
+            _w.show()
         except Exception as e:
-            progress.close(); QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
-
+            progress.close();
+            QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
 
 class FullDataWindow(QMainWindow):
@@ -3919,24 +4110,32 @@ class FullDataWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(title)
         self.setGeometry(100, 100, 1400, 700)
-        central_widget = QWidget(); self.setCentralWidget(central_widget)
+        central_widget = QWidget();
+        self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
-        info = QLabel(f"Total points: {len(data_df):,} | Memory: ~{len(data_df)*24/1024/1024:.1f} MB")
+        info = QLabel(f"Total points: {len(data_df):,} | Memory: ~{len(data_df) * 24 / 1024 / 1024:.1f} MB")
         info.setStyleSheet("font-size: 12px; color: #6b7280; padding: 5px; font-family: 'Consolas', monospace;")
         layout.addWidget(info)
-        fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
+        fig = Figure(figsize=(14, 6), dpi=100);
+        canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
-        ax.plot(data_df['timestamp'], data_df['surface_displacement'].values, linewidth=0.5, color='#3b82f6', alpha=0.8)
-        ax.set_xlabel('Date', fontsize=12); ax.set_ylabel('Surface displacement (meters)', fontsize=12)
+        ax.plot(data_df['timestamp'], data_df['surface_displacement'].values, linewidth=0.5, color=COLORS['wave_data'],
+                alpha=0.8,
+                marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
+        ax.set_xlabel('Date', fontsize=12);
+        ax.set_ylabel('Surface displacement (meters)', fontsize=12)
         ax.set_title(f'{title} — {len(data_df):,} points', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, zorder=0)
         import matplotlib.dates as mdates
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m-%y'))
-        fig.autofmt_xdate(); fig.tight_layout()
+        fig.autofmt_xdate();
+        fig.tight_layout()
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         toolbar = NavigationToolbar2QT(canvas, self)
-        layout.addWidget(toolbar); layout.addWidget(canvas)
-        close_btn = QPushButton("Close"); close_btn.clicked.connect(self.close)
+        layout.addWidget(toolbar);
+        layout.addWidget(canvas)
+        close_btn = QPushButton("Close");
+        close_btn.clicked.connect(self.close)
         layout.addWidget(close_btn)
 
 
@@ -3945,18 +4144,22 @@ class FullSpectrumWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Full Spectrum")
         self.setGeometry(100, 100, 1400, 700)
-        central_widget = QWidget(); self.setCentralWidget(central_widget)
+        central_widget = QWidget();
+        self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         info = QLabel(f"Total frequency points: {len(spectrum_df):,}")
         info.setStyleSheet("font-size: 12px; color: #6b7280; padding: 5px; font-family: 'Consolas', monospace;")
         layout.addWidget(info)
-        fig = Figure(figsize=(14, 6), dpi=100); canvas = FigureCanvas(fig)
+        fig = Figure(figsize=(14, 6), dpi=100);
+        canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
         freq = spectrum_df['frequency'].values
-        real = spectrum_df['real'].values; imag = spectrum_df['imag'].values
+        real = spectrum_df['real'].values;
+        imag = spectrum_df['imag'].values
         # Two-sided FFT stored in CSV → one-sided PSD needs factor 2
-        N = len(freq); omega_max = np.max(np.abs(freq)) if N > 0 else 1
-        s = (real**2 + imag**2) / ((N / 2) * omega_max)
+        N = len(freq);
+        omega_max = np.max(np.abs(freq)) if N > 0 else 1
+        s = (real ** 2 + imag ** 2) / ((N / 2) * omega_max)
         if log_scale:
             # Full spectrum, skip DC (zero harmonic) and the first harmonic
             # which is usually orders of magnitude larger and squashes the rest
@@ -3967,19 +4170,21 @@ class FullSpectrumWindow(QMainWindow):
             # Linear scale — overview, exclude low-freq noise (same as top graph in Step 3)
             mask = freq > 0.05
             title_suffix = "ω > 0.05, linear scale"
-        ax.plot(freq[mask], s[mask], linewidth=0.8, color='#f43f5e')
-        ax.set_xlabel('ω, [rad/s]', fontsize=12); ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
+        ax.plot(freq[mask], s[mask], linewidth=0.8, color=COLORS['dive_detect'], zorder=2)
+        ax.set_xlabel('ω, [rad/s]', fontsize=12);
+        ax.set_ylabel('S(ω), [m²/s]', fontsize=12)
         ax.set_title(f'Full Spectrum — {mask.sum():,} points — {title_suffix}', fontsize=14, fontweight='bold')
         if log_scale:
             ax.set_yscale('log')
-        ax.grid(True, alpha=0.3, which='both')
+        ax.grid(True, alpha=0.3, which='both', zorder=0)
         fig.tight_layout()
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         toolbar = NavigationToolbar2QT(canvas, self)
-        layout.addWidget(toolbar); layout.addWidget(canvas)
-        close_btn = QPushButton("Close"); close_btn.clicked.connect(self.close)
+        layout.addWidget(toolbar);
+        layout.addWidget(canvas)
+        close_btn = QPushButton("Close");
+        close_btn.clicked.connect(self.close)
         layout.addWidget(close_btn)
-
 
 
 class PipelineCompleteWindow(QDialog):
@@ -4146,8 +4351,8 @@ class PipelineCompleteWindow(QDialog):
         fl.addWidget(QLabel("Choose export format:"))
 
         formats = [
-            ("Text (.txt) — tab-separated",          "txt"),
-            ("MATLAB (.mat) — scipy.io.savemat",      "mat"),
+            ("Text (.txt) — tab-separated", "txt"),
+            ("MATLAB (.mat) — scipy.io.savemat", "mat"),
         ]
         radios = []
         for label, key in formats:
@@ -4157,9 +4362,12 @@ class PipelineCompleteWindow(QDialog):
         radios[0][0].setChecked(True)
 
         btn_row = QHBoxLayout()
-        ok_btn  = QPushButton("Export"); ok_btn.clicked.connect(fmt_dialog.accept)
-        cxl_btn = QPushButton("Cancel"); cxl_btn.clicked.connect(fmt_dialog.reject)
-        btn_row.addWidget(ok_btn); btn_row.addWidget(cxl_btn)
+        ok_btn = QPushButton("Export");
+        ok_btn.clicked.connect(fmt_dialog.accept)
+        cxl_btn = QPushButton("Cancel");
+        cxl_btn.clicked.connect(fmt_dialog.reject)
+        btn_row.addWidget(ok_btn);
+        btn_row.addWidget(cxl_btn)
         fl.addLayout(btn_row)
 
         if fmt_dialog.exec_() != QDialog.Accepted:
@@ -4184,13 +4392,13 @@ class PipelineCompleteWindow(QDialog):
         prog_lbl.setAlignment(Qt.AlignCenter)
         _pl.addWidget(prog_lbl)
         prog_bar = QProgressBar()
-        prog_bar.setRange(0, 0)   # indeterminate spinner
+        prog_bar.setRange(0, 0)  # indeterminate spinner
         _pl.addWidget(prog_bar)
         prog.show()
         QApplication.processEvents()
 
         exported = []
-        errors   = []
+        errors = []
         files = ("Step4_Filtered.csv", "Parameters.csv")
 
         for idx, fname in enumerate(files):
@@ -4199,7 +4407,8 @@ class PipelineCompleteWindow(QDialog):
 
             src = self.output_folder / fname
             if not src.exists():
-                errors.append(f"{fname} not found"); continue
+                errors.append(f"{fname} not found");
+                continue
             try:
                 df = pd.read_csv(src, comment='#')
                 stem = src.stem
