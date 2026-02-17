@@ -18,6 +18,14 @@ from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 
 # ==============================================================================
+# APPLICATION METADATA
+# ==============================================================================
+APP_NAME = "Wave Preprocessing Pipeline"
+APP_VERSION = "1.2.0"
+APP_AUTHOR = "Andrei Tregubov"
+APP_YEAR = "2026"
+
+# ==============================================================================
 # MODERN MATPLOTLIB THEME (light background, refined colors)
 # ==============================================================================
 plt.rcParams.update({
@@ -68,6 +76,24 @@ VISUALIZATION_TARGET_POINTS = 5000
 # because frequency domain requires finer resolution
 SPECTRUM_TARGET_POINTS = 100000
 # ==============================================================================
+
+# ==============================================================================
+# FOOTER FUNCTION FOR ALL WINDOWS
+# ==============================================================================
+def add_footer(window):
+    """Add status bar footer to any QMainWindow with app info"""
+    footer_text = f"{APP_NAME} v{APP_VERSION}  |  © {APP_YEAR} {APP_AUTHOR}"
+    status_bar = window.statusBar()
+    status_bar.showMessage(footer_text)
+    status_bar.setStyleSheet("""
+        QStatusBar {
+            background-color: #f8f9fa;
+            color: #6c757d;
+            font-size: 10px;
+            border-top: 1px solid #dee2e6;
+            padding: 2px 8px;
+        }
+    """)
 
 
 def read_sensor_freq_from_csv(csv_path, default=None):
@@ -499,8 +525,9 @@ class MainWindow(QMainWindow):
 
         self.apply_global_styles()
 
-        # Show maximized AFTER UI is fully built
+        add_footer(self)
         self.showMaximized()
+
 
     def create_info_section(self):
         """Section for INFO file"""
@@ -1105,6 +1132,9 @@ class VisualizationWindow(QMainWindow):
 
         self.apply_styles()
 
+        # Add footer
+        add_footer(self)
+
     def create_plot(self):
         """Create matplotlib plot - optimized for speed"""
 
@@ -1507,6 +1537,9 @@ class ManualRemovalWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
         self.apply_styles()
+
+        # Add footer
+        add_footer(self)
 
     def detect_dive_legs(self):
         """Detect dive legs on visualization (subsampled) data"""
@@ -2216,6 +2249,9 @@ class Step3FourierWindow(QMainWindow):
         btn_layout.addWidget(self.btn_continue)
 
         layout.addLayout(btn_layout)
+
+        # Add footer
+        add_footer(self)
 
     def load_and_transform(self):
         """Load Step2 data and perform FFT"""
@@ -3175,6 +3211,9 @@ class Step4ProcessingWindow(QMainWindow):
         btn_layout.addWidget(self.btn_start)
 
         layout.addLayout(btn_layout)
+
+        # Add footer
+        add_footer(self)
 
     def load_and_visualize(self):
         """Load Step3_Visualization and create plot"""
