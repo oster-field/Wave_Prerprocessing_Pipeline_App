@@ -119,17 +119,17 @@ def create_progress_indicator(current_step):
     """Create compact progress indicator showing pipeline steps
 
     Args:
-        current_step: 0=Load, 1=Visualize, 2=Manual, 3=Fourier, 4=Filter
+        current_step: 0=Load, 1=Plot, 2=Cut, 3=Fourier, 4=Analise
 
     Returns:
         QWidget with progress indicator
     """
     steps = [
         ("📁", "Load"),
-        ("📊", "Visualize"),
-        ("✂️", "Remove"),
+        ("📊", "Plot"),
+        ("✂️", "Cut"),
         ("🔄", "Fourier"),
-        ("🎯", "Filter")
+        ("🎯", "Analise")
     ]
 
     widget = QWidget()
