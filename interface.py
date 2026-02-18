@@ -119,7 +119,7 @@ def create_progress_indicator(current_step):
     """Create compact progress indicator showing pipeline steps
 
     Args:
-        current_step: 0=Load, 1=Plot, 2=Cut, 3=Fourier, 4=Analise
+        current_step: 0=Load, 1=Plot, 2=Cut, 3=Fourier, 4=Analyze
 
     Returns:
         QWidget with progress indicator
@@ -129,7 +129,7 @@ def create_progress_indicator(current_step):
         ("📊", "Plot"),
         ("✂️", "Cut"),
         ("🔄", "Fourier"),
-        ("🎯", "Analise")
+        ("🎯", "Analyze")
     ]
 
     widget = QWidget()
@@ -3250,7 +3250,8 @@ class Step3FourierWindow(QMainWindow):
                 step3_ref = self  # keep Step3 alive a moment longer
                 win = Step4ProcessingWindow()
                 QApplication.instance()._step4_window = win
-                win.show()
+                # win.show() is NOT called here — Step4 shows itself after
+                # the graph is fully built inside load_and_visualize()
                 step3_ref.close()
 
             QTimer.singleShot(0, _open_step4)
@@ -3294,19 +3295,21 @@ class Step3FourierWindow(QMainWindow):
 
 
 class Step4ProcessingWindow(QMainWindow):
-    """Window for Step 4: Spike removal and RMS filtering"""
+    """Window for Step 4: Spike removal/RMS filtering/Spline interpolation + Processing"""
 
     def __init__(self):
         super().__init__()
         self.current_reading = 0  # Track which reading is being processed
         self.init_ui()
-        # Load after event loop starts so the window is visible first
+        # Load data and build graph before showing the window.
+        # Progress dialog is shown during loading; showMaximized() is called
+        # only after the graph is fully ready — no blank-window flash.
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, self.load_and_visualize)
 
     def init_ui(self):
         """Initialize Step 4 window"""
-        self.setWindowTitle("🌊 Step 4: Spike Removal & RMS Filtering")
+        self.setWindowTitle("🌊 Step 4: Quality Control & Processing")
         # Don't show maximized here - will show after data loads
 
         central_widget = QWidget()
@@ -3318,7 +3321,7 @@ class Step4ProcessingWindow(QMainWindow):
         layout.addWidget(progress)
 
         # Header
-        header = QLabel("Step 4: Data Quality Processing")
+        header = QLabel("Step 4: Data Quality Control & Processing")
         header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
@@ -3446,7 +3449,6 @@ class Step4ProcessingWindow(QMainWindow):
 
     def load_and_visualize(self):
         """Load Step3_Visualization and create plot"""
-        self.hide()  # Hide window while loading — shown maximized after data is ready
         output_folder = OUTPUT_FOLDER
 
         step3_viz = output_folder / "Step3_Visualization.csv"
@@ -3462,7 +3464,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         _lay = QVBoxLayout(progress_dialog)
 
-        _lbl = QLabel("Step 4: Spike Removal & RMS Filtering")
+        _lbl = QLabel("Step 4: Data Quality Control & Processing")
         _lbl.setAlignment(Qt.AlignCenter)
         _lbl.setFont(QFont("Segoe UI", 11, QFont.Bold))
         _lbl.setStyleSheet("color: #111827;")
@@ -3501,17 +3503,21 @@ class Step4ProcessingWindow(QMainWindow):
             status.setText("Opening window...")
             QApplication.processEvents()
 
-            # Store data for deferred draw, then show maximized BEFORE building
-            # the plot so the canvas already has its final pixel size when
-            # matplotlib renders (avoids a second full render after resize).
+            # Store data and build graph BEFORE showing the window.
+            # This way showMaximized() reveals a fully rendered graph instantly.
             self._pending_plot_df = df
             progress_bar.setValue(90)
+            status.setText("Building graph...")
+            QApplication.processEvents()
+
+            # Build the plot now while progress dialog is still visible
+            self.create_interactive_plot(df)
+            self._pending_plot_df = None
+
             progress_dialog.close()
 
+            # Graph is ready — show the window for the first time, fully rendered
             self.showMaximized()
-            # One event-loop tick later the window has its real dimensions
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(0, self._draw_initial_plot)
 
         except Exception as e:
             progress_dialog.close()
@@ -3561,7 +3567,7 @@ class Step4ProcessingWindow(QMainWindow):
                 ax.axvline(reading_start, color='gray', linestyle='--',
                            linewidth=0.5, alpha=0.3)
 
-        ax.set_title('Step 3: Transformed Data (after Fourier Transform, with 20-min reading boundaries)',
+        ax.set_title('Transformed Data (after Fourier Transform, with 20-min reading boundaries)',
                      fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.3, zorder=0)
 
@@ -4076,7 +4082,7 @@ class Step4ProcessingWindow(QMainWindow):
             step4_file = output_folder / "Step4_Filtered.csv"
 
             with open(step4_file, 'w', encoding='utf-8') as f:
-                f.write("# STEP 4: Filtered Data - Spike removal & RMS filtering\n")
+                f.write("# STEP 4: Data Quality Control & Processing\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Spike removal: {remove_spikes}\n")
                 f.write(f"# RMS filtering: {remove_low_rms}\n")
@@ -4913,7 +4919,7 @@ def main():
             f"• Step3_Transformed.csv\n"
             f"• Step3_Visualization.csv\n"
             f"• Parameters.csv\n\n"
-            "Continue to Step 4 (Spike removal & RMS filtering) or start from scratch?",
+            "Continue to Step 4 (Data Quality Control & Processing) or start from scratch?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
