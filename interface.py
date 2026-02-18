@@ -1289,6 +1289,8 @@ class VisualizationWindow(QMainWindow):
         # Create figure
         fig = Figure(figsize=(14, 6), dpi=100)
         canvas = FigureCanvas(fig)
+        canvas.setSizePolicy(canvas.sizePolicy().Expanding,
+                             canvas.sizePolicy().Expanding)
 
         ax = fig.add_subplot(111)
 
@@ -1339,6 +1341,11 @@ class VisualizationWindow(QMainWindow):
                      fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3, zorder=0)
         ax.legend(loc='upper right')
+
+        # Horizontal reference line at y=0 — only when dives are detected
+        if self._has_dives:
+            ax.axhline(y=0, color='black', linewidth=1.8, linestyle='--', dashes=(6, 4),
+                       alpha=0.7, zorder=5)
 
         # Format x-axis with dates
         import matplotlib.dates as mdates
@@ -1552,7 +1559,7 @@ class VisualizationWindow(QMainWindow):
             df = pd.read_csv(OUTPUT_FOLDER / 'Step1_TXTtoCSV.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
-            _w = FullDataWindow(df, 'Step 1: Full Raw Data')
+            _w = FullDataWindow(df, 'Step 1: Full Raw Data', has_dives=getattr(self, '_has_dives', True))
             self._full_window = _w;
             _w.show()
         except Exception as e:
@@ -1565,8 +1572,8 @@ class VisualizationWindow(QMainWindow):
             QMainWindow {
                 background-color: #f9fafb;
             }
-            QWidget {
-                background-color: #f9fafb;
+            QLabel {
+                background-color: transparent;
                 font-family: 'Segoe UI', sans-serif;
             }
             QPushButton {
@@ -1577,6 +1584,7 @@ class VisualizationWindow(QMainWindow):
                 border-radius: 6px;
                 font-size: 13px;
                 font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
                 background-color: #e5e7eb;
@@ -1824,6 +1832,8 @@ class ManualRemovalWindow(QMainWindow):
         # Taller figure for vertical layout
         fig = Figure(figsize=(14, 5), dpi=100)
         canvas = FigureCanvas(fig)
+        canvas.setSizePolicy(canvas.sizePolicy().Expanding,
+                             canvas.sizePolicy().Expanding)
 
         ax = fig.add_subplot(111)
 
@@ -2040,6 +2050,8 @@ class ManualRemovalWindow(QMainWindow):
         # Container widget
         container = QWidget()
         container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
         container_layout.addWidget(toolbar)
         container_layout.addWidget(canvas)
 
@@ -2241,12 +2253,13 @@ class ManualRemovalWindow(QMainWindow):
             QMainWindow {
                 background-color: #f9fafb;
             }
-            QWidget {
-                background-color: #f9fafb;
+            QLabel {
+                background-color: transparent;
                 font-family: 'Segoe UI', sans-serif;
             }
             QGroupBox {
                 font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
                 border: 1px solid #e5e7eb;
                 border-radius: 10px;
                 margin-top: 12px;
@@ -2269,6 +2282,7 @@ class ManualRemovalWindow(QMainWindow):
                 border-radius: 6px;
                 font-size: 13px;
                 font-weight: 600;
+                font-family: 'Segoe UI', sans-serif;
             }
             QPushButton:hover {
                 background-color: #e5e7eb;
@@ -2285,7 +2299,8 @@ class Step3FourierWindow(QMainWindow):
         self.spectrum_full = None  # complex FFT — for apply_transform
         self.frequencies_full = None
         self.cutoff_freq = None
-        self.data_step2 = None  # cached Step2_Zero_Mean DataFrame (timestamps + reading_number)
+        self.sensor_freq = None   # Hz — cached for apply_transform
+        self.data_step2 = None    # cached Step2_Zero_Mean DataFrame (timestamps + reading_number)
         self.init_ui()
         self.load_and_transform()
 
@@ -2536,6 +2551,7 @@ class Step3FourierWindow(QMainWindow):
 
             # Read sensor frequency from Step2 metadata header
             sensor_freq = read_sensor_freq_from_csv(step2_file)
+            self.sensor_freq = sensor_freq  # cache for apply_transform
 
             progress_bar.setValue(30)
             status.setText(f"Computing FFT for {len(y):,} points (sensor freq: {sensor_freq} Hz)...")
@@ -2810,29 +2826,6 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            # Apply cutoff filter on the complex FFT spectrum
-            progress_bar.setValue(20)
-            status.setText("Applying frequency filter...")
-            QApplication.processEvents()
-
-            s_filtered = self.spectrum_full.copy()
-
-            # Zero out frequencies below cutoff — vectorised, O(N) not O(N) with Python overhead
-            s_filtered[np.abs(self.frequencies_full) < self.cutoff_freq] = 0j
-
-            progress_bar.setValue(40)
-            status.setText("Computing inverse FFT...")
-            QApplication.processEvents()
-
-            # Inverse FFT
-            from scipy.fftpack import ifft
-
-            y_transformed = ifft(s_filtered).real
-
-            progress_bar.setValue(60)
-            status.setText("Saving transformed data...")
-            QApplication.processEvents()
-
             # Reuse the DataFrame cached during FFT computation.
             # If loading from checkpoint (cache path), data_step2 is None → read once.
             step2_file = output_folder / "Step2_Zero_Mean.csv"
@@ -2841,21 +2834,73 @@ class Step3FourierWindow(QMainWindow):
             else:
                 data_orig = pd.read_csv(step2_file, comment='#')
 
+            # Recover sensor_freq — prefer cached value, fall back to reading the file
+            sensor_freq = self.sensor_freq if self.sensor_freq else read_sensor_freq_from_csv(step2_file)
+
+            y = data_orig['surface_displacement'].values
+            N = len(y)
+
+            # ------------------------------------------------------------------
+            # PARTIAL MIRROR PADDING to suppress Gibbs / edge-ringing artefacts
+            # ------------------------------------------------------------------
+            # The boundary effect from hard-zeroing frequencies decays over a
+            # distance of roughly one period of the cutoff frequency.
+            # We reflect that many samples at each end, perform FFT+filter+IFFT
+            # on the padded signal, then discard the padding.  The padded region
+            # absorbs the ringing so the recovered signal is clean at the edges.
+            #
+            # pad size = one full period of cutoff_freq, capped at N//4 so we
+            # never more than double the signal length.
+            progress_bar.setValue(10)
+            status.setText("Computing mirror padding size...")
+            QApplication.processEvents()
+
+            cutoff_period_samples = int((2 * np.pi / self.cutoff_freq) * sensor_freq)
+            pad = min(cutoff_period_samples, N // 4)
+
+            # Build padded signal: [mirror of first pad samples | original | mirror of last pad samples]
+            y_left  = y[:pad][::-1]   # reflection of the beginning
+            y_right = y[-pad:][::-1]  # reflection of the end
+            y_padded = np.concatenate([y_left, y, y_right])
+            N_padded = len(y_padded)
+
+            progress_bar.setValue(20)
+            status.setText(f"Applying FFT on padded signal ({N_padded:,} points, pad={pad:,})...")
+            QApplication.processEvents()
+
+            # FFT of the padded signal
+            from scipy.fftpack import fft, ifft, fftfreq
+
+            s_padded = fft(y_padded)
+            freqs_padded = fftfreq(N_padded, (1 / sensor_freq) / (2 * np.pi))  # ω [rad/s]
+
+            progress_bar.setValue(40)
+            status.setText("Applying frequency filter...")
+            QApplication.processEvents()
+
+            # Zero out frequencies below cutoff (hard zeroing — ringing now absorbed by padding)
+            s_filtered = s_padded.copy()
+            s_filtered[np.abs(freqs_padded) < self.cutoff_freq] = 0j
+
+            progress_bar.setValue(55)
+            status.setText("Computing inverse FFT...")
+            QApplication.processEvents()
+
+            # Inverse FFT → discard padding, keep only the original N samples
+            y_padded_back = ifft(s_filtered).real
+            y_transformed = y_padded_back[pad: pad + N]   # strip left and right mirrors
+
+            progress_bar.setValue(65)
+            status.setText("Removing edge readings affected by boundary effects...")
+            QApplication.processEvents()
+
             # Create transformed dataframe
             data_transformed = data_orig.copy()
             data_transformed['surface_displacement'] = y_transformed
 
-            progress_bar.setValue(65)
-            status.setText("Removing edge readings...")
-            QApplication.processEvents()
-
-            # Remove first 2 and last 2 readings (20-minute recordings)
+            # Mirror padding fully absorbs boundary ringing — no edge readings need to be removed.
             reading_numbers = data_transformed['reading_number'].unique()
-            if len(reading_numbers) > 4:
-                # Get reading numbers to keep (exclude first 2 and last 2)
-                readings_to_keep = reading_numbers[2:-2]
-                data_transformed = data_transformed[data_transformed['reading_number'].isin(readings_to_keep)]
-                data_transformed = data_transformed.reset_index(drop=True)
+            readings_to_keep = reading_numbers  # keep all readings
 
             progress_bar.setValue(70)
             status.setText("Saving transformed data...")
@@ -2864,15 +2909,16 @@ class Step3FourierWindow(QMainWindow):
             # Save Step3_Transformed
             step3_file = output_folder / "Step3_Transformed.csv"
 
+            cutoff_period_sec = (2 * np.pi / self.cutoff_freq)
+
             with open(step3_file, 'w', encoding='utf-8') as f:
                 f.write("# STEP 3: Transformed Data - Low frequencies removed\n")
                 f.write("# ==========================================\n")
-                f.write(f"# Sensor frequency: {read_sensor_freq_from_csv(step2_file)} Hz\n")
+                f.write(f"# Sensor frequency: {sensor_freq} Hz\n")
                 f.write(f"# Cutoff frequency: {self.cutoff_freq:.6f} rad/s\n")
-                f.write(f"# Original readings: {len(reading_numbers)}\n")
-                f.write(
-                    f"# Readings after edge removal: {len(readings_to_keep) if len(reading_numbers) > 4 else len(reading_numbers)}\n")
-                f.write(f"# First 2 and last 2 readings removed\n")
+                f.write(f"# Cutoff period: {cutoff_period_sec:.1f} s\n")
+                f.write(f"# Mirror padding: {pad:,} samples ({pad / sensor_freq:.1f} s) each side\n")
+                f.write(f"# Total readings: {len(reading_numbers)}\n")
                 f.write(f"# Total points: {len(data_transformed)}\n")
                 f.write("# ==========================================\n")
 
@@ -3813,8 +3859,13 @@ class Step4ProcessingWindow(QMainWindow):
             # Process in batches for visualization
             reading_nums = list(reading_arrays.keys())
 
-            # Visualization: batch size 100 for speed
-            batch_size = 100
+            # Visualization: adaptive time-based updates (~150 ms between redraws)
+            # This replaces the fixed batch_size=100 approach: on fast machines
+            # updates happen more often, on slow machines less often — computation
+            # is never blocked by the renderer.
+            import time
+            DRAW_INTERVAL = 0.15  # seconds between canvas redraws (≈6-7 fps, smooth for the eye)
+            last_draw_time = time.monotonic()
             batch_readings = []
             removed_in_batch = []  # Track which specific readings were removed
 
@@ -3955,8 +4006,9 @@ class Step4ProcessingWindow(QMainWindow):
                     'BFI_rho': BFI_rho
                 })
 
-                # ========== VISUALIZATION (OPTIMIZED) ==========
-                if (idx + 1) % batch_size == 0 or idx == total_readings - 1:
+                # ========== VISUALIZATION (ADAPTIVE TIME-BASED) ==========
+                now = time.monotonic()
+                if now - last_draw_time >= DRAW_INTERVAL or idx == total_readings - 1:
                     # Color entire batch GREEN first
                     if len(batch_readings) > 0:
                         batch_start = batch_readings[0]['start']
@@ -3979,8 +4031,9 @@ class Step4ProcessingWindow(QMainWindow):
                     batch_readings = []
                     removed_in_batch = []
 
-                    self.canvas.draw()
+                    self.canvas.draw_idle()
                     QApplication.processEvents()
+                    last_draw_time = time.monotonic()
 
             # Draw black circles for spikes
             progress_bar.setValue(87)
@@ -4125,11 +4178,12 @@ class FullDataWindow(QMainWindow):
     no double-render even for 50 M points.
     """
 
-    def __init__(self, data_df, title):
+    def __init__(self, data_df, title, has_dives=True):
         super().__init__()
         self.setWindowTitle(title)
-        self._data_df = data_df
-        self._title   = title
+        self._data_df   = data_df
+        self._title     = title
+        self._has_dives = has_dives
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -4199,9 +4253,10 @@ class FullDataWindow(QMainWindow):
                 markerfacecolor=COLORS['wave_data'], markeredgewidth=0,
                 zorder=2)
 
-        # Horizontal reference line at y=0
-        ax.axhline(y=0, color='black', linewidth=1.8, linestyle='--',
-                   dashes=(6, 4), alpha=0.7, zorder=4)
+        # Horizontal reference line at y=0 — only when dives are detected
+        if self._has_dives:
+            ax.axhline(y=0, color='black', linewidth=1.8, linestyle='--',
+                       dashes=(6, 4), alpha=0.7, zorder=4)
 
         ax.set_xlabel('Date', fontsize=11)
         ax.set_ylabel('Surface displacement (m)', fontsize=11)
