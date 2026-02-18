@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QProgressBar, QTextEdit, QCheckBox, QLineEdit,
                              QSpinBox, QRadioButton, QAction)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
-from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent, QIcon
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -22,7 +22,7 @@ from matplotlib import pyplot as plt
 # APPLICATION METADATA
 # ==============================================================================
 APP_NAME = "Wave Preprocessing Pipeline"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.0.0"
 APP_AUTHOR = "Andrei Tregubov"
 APP_YEAR = "2026"
 
@@ -594,7 +594,7 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         """Initialize the main window UI."""
-        self.setWindowTitle("🌊 Wave data preprocessing pipeline")
+        self.setWindowTitle("Wave data preprocessing pipeline")
 
         # Central widget
         central_widget = QWidget()
@@ -4738,6 +4738,7 @@ def clear_output_folder(output_folder):
 def main():
     """Launch application"""
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(SCRIPT_DIR / 'assets' / 'icon.ico')))
     app.setStyle('Fusion')
 
     # Global modern stylesheet — light theme with refined custom controls
