@@ -297,7 +297,9 @@ class ProcessingThread(QThread):
 
             # Step 6: Generate timestamps (vectorized!)
             self.progress.emit(70, "Generating timestamps...")
-            start_time = datetime.datetime.combine(metadata['date_start'], datetime.time())
+
+            # Use full datetime from INFO file (date + time), not midnight-truncated date
+            start_time = metadata['dt_start']
 
             # Calculate frequency in milliseconds
             time_delta_milliseconds = 1000.0 / metadata['sensor_frequency']  # ms per point
@@ -308,6 +310,21 @@ class ProcessingThread(QThread):
                 periods=len(all_data),
                 freq=f'{time_delta_milliseconds}ms'
             )
+
+            # Integrity check: warn if last generated timestamp deviates from the
+            # expected end datetime in the INFO file by more than 5 minutes.
+            # Date-only comparison is too coarse; we compare full datetimes but
+            # allow a 5-minute tolerance to account for sensor clock drift and
+            # incomplete trailing readings being dropped.
+            last_ts = timestamps[-1].to_pydatetime()
+            dt_end = metadata.get('dt_end')
+            if dt_end is not None:
+                delta_seconds = abs((last_ts - dt_end).total_seconds())
+                timestamp_mismatch = delta_seconds > 300  # 5 minutes
+            else:
+                timestamp_mismatch = False
+            last_ts_date = last_ts.date()
+            expected_end_date = dt_end.date() if dt_end else None
 
             # Step 7: Create DataFrame (single operation!)
             self.progress.emit(85, "Creating DataFrame...")
@@ -324,6 +341,9 @@ class ProcessingThread(QThread):
             final_df.attrs['recording_end'] = str(metadata['date_end'])
             final_df.attrs['points_per_reading'] = points_per_reading
             final_df.attrs['total_readings'] = num_complete_readings
+            final_df.attrs['timestamp_mismatch'] = timestamp_mismatch
+            final_df.attrs['last_timestamp_date'] = str(last_ts_date)
+            final_df.attrs['expected_end_date'] = str(expected_end_date) if expected_end_date else 'N/A'
 
             # Step 8: Save to CSV
             self.progress.emit(90, "Saving to CSV file...")
@@ -405,6 +425,7 @@ class ProcessingThread(QThread):
             'date_start': date_start,
             'date_end': date_end,
             'dt_start': dt_start,
+            'dt_end': dt_end,
             'sensor_frequency': sensor_frequency,
         }
 
@@ -986,6 +1007,19 @@ class MainWindow(QMainWindow):
             viz_data.to_csv(viz_cache_file, mode='a', index=False)
 
             # Show success message
+            recording_period_line = f"  • Recording period: {result_df.attrs.get('recording_start')} to {result_df.attrs.get('recording_end')}\n"
+
+            if result_df.attrs.get('timestamp_mismatch'):
+                last_date = result_df.attrs.get('last_timestamp_date', '?')
+                expected_date = result_df.attrs.get('expected_end_date', '?')
+                mismatch_warning = (
+                    f"\n⚠️  Last data point ({last_date}) does not match the recording end date in the INFO file ({expected_date}).\n"
+                    f"     Possible causes: incomplete set of data files, or an error in the INFO file.\n"
+                    f"     Please verify that all data files are loaded before proceeding."
+                )
+            else:
+                mismatch_warning = ""
+
             QMessageBox.information(
                 self,
                 "Success!",
@@ -994,7 +1028,8 @@ class MainWindow(QMainWindow):
                 f"  • Total points: {len(result_df):,}\n"
                 f"  • Total readings (20-min): {result_df['reading_number'].max()}\n"
                 f"  • Sensor frequency: {result_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz\n"
-                f"  • Recording period: {result_df.attrs.get('recording_start')} to {result_df.attrs.get('recording_end')}\n\n"
+                f"{recording_period_line}"
+                f"{mismatch_warning}\n"
             )
 
             # Store result for visualization - use subsampled data
@@ -3828,11 +3863,6 @@ class Step4ProcessingWindow(QMainWindow):
 
             import matplotlib.dates as mdates
 
-            # Batch visualization
-            batch_size = 10
-            batch_readings = []
-            batch_has_removal = False
-
             # Read sensor frequency from CSV header (Step3 inherits it from Step2)
             sensor_freq = read_sensor_freq_from_csv(step2_file)
 
@@ -4927,7 +4957,9 @@ def main():
         if reply == QMessageBox.Yes:
             step4_window = Step4ProcessingWindow()
             app.instance()._step4_window = step4_window  # keep alive — prevent GC
-            step4_window.show()
+            # Do NOT call step4_window.show() here — Step4 shows itself via
+            # showMaximized() inside load_and_visualize(), only after the graph
+            # is fully built. Calling show() here would flash a blank window.
             sys.exit(app.exec_())
         else:
             # User wants to start from scratch — delete all output files
