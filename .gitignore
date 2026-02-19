@@ -1,36 +1,36 @@
-# Byte-compiled / optimized / DLL files
+# ==============================
+# Pipeline output data
+# ==============================
+Output/
+Output_*/
+
+# ==============================
+# Python
+# ==============================
 __pycache__/
 *.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-dist/
-*.egg-info/
-.eggs/
-LICENSE
-MANIFEST
-
-# Virtual environment
-env/
+*.pyo
+.venv/
 venv/
-ENV/
-env.bak/
-venv.bak/
+env/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# ==============================
+# PyInstaller
+# ==============================
+dist/
+build/
+*.spec
 
-# mypy
-.mypy_cache/
-.dmypy.json
+# ==============================
+# OS
+# ==============================
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# pytest
-.cache
-
-# Pylint
-.pylint.d/
+# ==============================
+# IDE
+# ==============================
+.idea/
+.vscode/
+*.iml
