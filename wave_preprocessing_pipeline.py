@@ -4175,7 +4175,8 @@ class Step4ProcessingWindow(QMainWindow):
             _cw = PipelineCompleteWindow(output_folder, stats)
             QApplication.instance()._complete_window = _cw
             _cw.show()
-            self.close()
+            self.btn_start.setEnabled(False)
+            self.btn_start.setText("▶  Processing Complete")
 
         except Exception as e:
             progress_dialog.close()
