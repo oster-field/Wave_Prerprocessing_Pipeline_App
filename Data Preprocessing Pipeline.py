@@ -3762,26 +3762,28 @@ class Step4ProcessingWindow(QMainWindow):
         def extract_amplitudes_and_heights(arr, sensor_freq):
             """
             Find all zero-crossings, extract amplitudes (max |value| between
-            consecutive crossings) and heights (sum of absolute values of
-            adjacent amplitudes).
+            consecutive crossings) and heights (sum of adjacent amplitudes).
+            Also computes rho = n_segments / n_extrema, where extrema are
+            local maxima of |signal| within each segment (after half-Nyquist
+            low-pass filtering to suppress noise).
 
-            Returns (amplitudes, heights, Tz) where:
-              amplitudes — list of floats, one per half-wave segment
-              heights    — list of floats, one per full wave (N-1 values)
-              Tz         — mean zero-crossing period in seconds
+            Returns (amplitudes, heights, Tz, rho)
             """
             from PyAstronomy import pyaC
+            from scipy.fftpack import rfft, irfft
+
             try:
                 x = np.arange(len(arr))
                 xc, xi = pyaC.zerocross1d(x, arr, getIndices=True)
                 n_crossings = len(xc)
 
                 if n_crossings < 2:
-                    return [], [], 10.0
+                    return [], [], 10.0, 0
 
                 xc_int = np.round(xc).astype(int)
                 xc_int = np.clip(xc_int, 0, len(arr) - 1)
 
+                # Amplitudes: max |value| in each segment
                 amplitudes = []
                 for i in range(len(xc_int) - 1):
                     seg = arr[xc_int[i]: xc_int[i + 1]]
@@ -3790,19 +3792,56 @@ class Step4ProcessingWindow(QMainWindow):
                     else:
                         amplitudes.append(0.0)
 
+                # Heights: sum of two adjacent amplitudes
                 heights = [amplitudes[i] + amplitudes[i + 1]
                            for i in range(len(amplitudes) - 1)]
 
+                # Tz from crossing count
                 Tz = ((len(arr) / sensor_freq) / n_crossings) * 2
 
-                return amplitudes, heights, Tz
+                # rho: filter arr above half-Nyquist to suppress noise,
+                # then count local maxima of |signal| in each segment
+                try:
+                    n_freq = len(arr)
+                    spectrum = rfft(arr)
+                    freqs = np.fft.rfftfreq(n_freq, d=1.0 / sensor_freq)
+                    half_nyquist = sensor_freq / 4.0  # half of Nyquist = sensor_freq/2
+                    spectrum[freqs > half_nyquist] = 0
+                    y = irfft(spectrum, n=n_freq)
+
+                    # Re-find zero crossings on filtered signal
+                    xc_f, _ = pyaC.zerocross1d(x, y, getIndices=True)
+                    if len(xc_f) < 2:
+                        rho = 0
+                    else:
+                        xc_f_int = np.round(xc_f).astype(int)
+                        xc_f_int = np.clip(xc_f_int, 0, len(y) - 1)
+
+                        n_segments = len(xc_f_int) - 1
+                        total_extremas = 0
+
+                        for i in range(n_segments):
+                            seg = np.abs(y[xc_f_int[i]: xc_f_int[i + 1]])
+                            # Local maxima of |signal|: point greater than both neighbours
+                            for c in range(1, len(seg) - 1):
+                                if seg[c] > seg[c - 1] and seg[c] > seg[c + 1]:
+                                    total_extremas += 1
+
+                        if total_extremas > 0:
+                            rho = min(n_segments / total_extremas, 1.0)
+                        else:
+                            rho = 0
+                except Exception:
+                    rho = 0
+
+                return amplitudes, heights, Tz, rho
 
             except Exception:
-                return [], [], 10.0
+                return [], [], 10.0, 0
 
         def calculate_Tz(arr, sensor_freq):
             """Thin wrapper kept for backward compatibility."""
-            _, _, Tz = extract_amplitudes_and_heights(arr, sensor_freq)
+            _, _, Tz, _ = extract_amplitudes_and_heights(arr, sensor_freq)
             return Tz
 
         # Show progress dialog
@@ -3857,7 +3896,7 @@ class Step4ProcessingWindow(QMainWindow):
             spike_locations = []
 
             # Storage for ALL new parameters
-            new_params = []
+            reading_params = []
 
             # Storage for per-reading amplitudes & heights (Variant B: packed strings)
             all_amplitudes_heights = []
@@ -3991,8 +4030,8 @@ class Step4ProcessingWindow(QMainWindow):
                 As = 2 * sigma
                 Hs = 4 * sigma
 
-                # Extract amplitudes, heights and Tz from arr_amp in one pass
-                wave_amplitudes, wave_heights, Tz = extract_amplitudes_and_heights(
+                # Extract amplitudes, heights, Tz and rho from arr_amp in one pass
+                wave_amplitudes, wave_heights, Tz, rho = extract_amplitudes_and_heights(
                     arr_amp, amp_sensor_freq
                 )
 
@@ -4003,18 +4042,6 @@ class Step4ProcessingWindow(QMainWindow):
                 Ur = (3 * k * Hs) / ((2 * k * depth) ** 3)
 
                 Q, nu, eps_width = calculate_spectrum_params(arr, sensor_freq)
-
-                # rho = n_amplitudes / n_extrema among the amplitude series
-                try:
-                    from scipy.signal import argrelmax
-                    amp_array = np.array(wave_amplitudes)
-                    if len(amp_array) >= 3:
-                        extremas = len(argrelmax(amp_array)[0])
-                        rho = min(len(amp_array) / extremas, 1.0) if extremas > 0 else 0
-                    else:
-                        rho = 0
-                except Exception:
-                    rho = 0
 
                 # Accumulate amplitudes & heights for Amplitudes_Heights.csv
                 amp_str = ';'.join(f'{v:.6f}' for v in wave_amplitudes)
@@ -4037,10 +4064,6 @@ class Step4ProcessingWindow(QMainWindow):
                 sqrt_2pi = np.sqrt(2 * np.pi)
                 BFI_proper = sqrt_2pi * eps * Q * gamma
                 BFI_goda = sqrt_2pi * eps * Q
-                BFI_goda_divide = eps / Q if Q != 0 else 0
-                BFI_nu = eps / nu if nu != 0 else 0
-                BFI_eps = eps / eps_width if eps_width != 0 else 0
-                BFI_rho = eps / eps_rho if eps_rho != 0 else 0
 
                 # As_1/3 and Hs_1/3 — mean of the top third of amplitudes/heights
                 if len(wave_amplitudes) >= 3:
@@ -4057,7 +4080,7 @@ class Step4ProcessingWindow(QMainWindow):
                 else:
                     Hs_1_3 = Hs  # fallback: not enough waves
 
-                new_params.append({
+                reading_params.append({
                     'reading_number': reading_num,
                     'average_depth': depth,
                     'rms': rms_value,
@@ -4079,10 +4102,6 @@ class Step4ProcessingWindow(QMainWindow):
                     'gamma': gamma,
                     'BFI_proper': BFI_proper,
                     'BFI_goda': BFI_goda,
-                    'BFI_goda_divide': BFI_goda_divide,
-                    'BFI_nu': BFI_nu,
-                    'BFI_eps': BFI_eps,
-                    'BFI_rho': BFI_rho
                 })
 
                 # ========== VISUALIZATION (ADAPTIVE TIME-BASED) ==========
@@ -4173,7 +4192,7 @@ class Step4ProcessingWindow(QMainWindow):
             status.setText("Updating Parameters.csv...")
             QApplication.processEvents()
 
-            new_params_df = pd.DataFrame(new_params)
+            reading_params_df = pd.DataFrame(reading_params)
 
             # Save updated Parameters.csv
             parameters_updated = output_folder / "Parameters.csv"
@@ -4184,7 +4203,7 @@ class Step4ProcessingWindow(QMainWindow):
                 f.write("# All wave parameters calculated in Step 3\n")
                 f.write("# ==========================================\n")
 
-            new_params_df.to_csv(parameters_updated, mode='a', index=False)
+            reading_params_df.to_csv(parameters_updated, mode='a', index=False)
 
             # Save Amplitudes_Heights.csv (Variant B — packed semicolon strings)
             amp_hgt_file = output_folder / "Amplitudes_Heights.csv"
@@ -4207,11 +4226,11 @@ class Step4ProcessingWindow(QMainWindow):
             progress_dialog.close()
 
             # Calculate statistics for display
-            if len(new_params) > 0:
-                mean_Hs = np.mean([p['Hs'] for p in new_params])
-                mean_Tz = np.mean([p['Tz'] for p in new_params])
-                mean_eps = np.mean([p['eps'] for p in new_params])
-                mean_BFI = np.mean([p['BFI_goda'] for p in new_params])
+            if len(reading_params) > 0:
+                mean_Hs = np.mean([p['Hs'] for p in reading_params])
+                mean_Tz = np.mean([p['Tz'] for p in reading_params])
+                mean_eps = np.mean([p['eps'] for p in reading_params])
+                mean_BFI = np.mean([p['BFI_goda'] for p in reading_params])
             else:
                 mean_Hs = mean_Tz = mean_eps = mean_BFI = 0
 
