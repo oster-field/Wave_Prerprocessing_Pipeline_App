@@ -3301,11 +3301,10 @@ class Step3FourierWindow(QMainWindow):
         progress_dialog.close()
 
         # Store reference to prevent GC, then show maximized.
-        # IMPORTANT: showMaximized() must come BEFORE self.hide() —
-        # Qt exits the event loop if there are no visible windows at any moment.
+        # Step3 stays alive (hidden from user) until _open_step4 closes it
+        # after Step4 is fully initialized.
         QApplication.instance()._comparison_window = comparison_window
         comparison_window.showMaximized()
-        self.hide()
 
     def _build_full_spectrum(self, log_scale: bool):
         """Load Step3_Spectrum.csv and display it in a FullSpectrumWindow."""
@@ -4494,7 +4493,7 @@ class PipelineCompleteWindow(QDialog):
         kept_lbl = QLabel(
             "<b>Output files:</b><br>"
             "• <tt>Parameters.csv</tt> — wave parameters for all readings<br>"
-            "• <tt>Step4_Filtered.csv</tt> — filtered surface_displacement time-series"
+            "• <tt>Step4_Filtered.csv</tt> — filtered surface displacement time-series"
         )
         kept_lbl.setTextFormat(Qt.RichText)
         kept_lbl.setStyleSheet("font-size:12px; color:#6b7280; padding: 4px 0; font-family: 'Segoe UI', sans-serif;")
@@ -4740,6 +4739,12 @@ def clear_output_folder(output_folder):
 def main():
     """Launch application"""
     app = QApplication(sys.argv)
+
+    # Prevent Qt from quitting automatically when the last visible window closes.
+    # This is required for transitions where one window hides before the next appears
+    # (e.g. Step3 → Before/After comparison → Step4).
+    app.setQuitOnLastWindowClosed(False)
+
     app.setWindowIcon(QIcon(str(SCRIPT_DIR / 'assets' / 'icon.ico')))
     app.setStyle('Fusion')
 
