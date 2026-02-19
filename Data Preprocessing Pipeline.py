@@ -3763,14 +3763,10 @@ class Step4ProcessingWindow(QMainWindow):
             """
             Find all zero-crossings, extract amplitudes (max |value| between
             consecutive crossings) and heights (sum of adjacent amplitudes).
-            Also computes rho = n_segments / n_extrema, where extrema are
-            local maxima of |signal| within each segment (after half-Nyquist
-            low-pass filtering to suppress noise).
 
-            Returns (amplitudes, heights, Tz, rho)
+            Returns (amplitudes, heights, Tz)
             """
             from PyAstronomy import pyaC
-            from scipy.fftpack import rfft, irfft
 
             try:
                 x = np.arange(len(arr))
@@ -3778,12 +3774,11 @@ class Step4ProcessingWindow(QMainWindow):
                 n_crossings = len(xc)
 
                 if n_crossings < 2:
-                    return [], [], 10.0, 0
+                    return [], [], 10.0
 
                 xc_int = np.round(xc).astype(int)
                 xc_int = np.clip(xc_int, 0, len(arr) - 1)
 
-                # Amplitudes: max |value| in each segment
                 amplitudes = []
                 for i in range(len(xc_int) - 1):
                     seg = arr[xc_int[i]: xc_int[i + 1]]
@@ -3792,56 +3787,68 @@ class Step4ProcessingWindow(QMainWindow):
                     else:
                         amplitudes.append(0.0)
 
-                # Heights: sum of two adjacent amplitudes
                 heights = [amplitudes[i] + amplitudes[i + 1]
                            for i in range(len(amplitudes) - 1)]
 
-                # Tz from crossing count
                 Tz = ((len(arr) / sensor_freq) / n_crossings) * 2
 
-                # rho: filter arr above half-Nyquist to suppress noise,
-                # then count local maxima of |signal| in each segment
-                try:
-                    n_freq = len(arr)
-                    spectrum = rfft(arr)
-                    freqs = np.fft.rfftfreq(n_freq, d=1.0 / sensor_freq)
-                    half_nyquist = sensor_freq / 4.0  # half of Nyquist = sensor_freq/2
-                    spectrum[freqs > half_nyquist] = 0
-                    y = irfft(spectrum, n=n_freq)
-
-                    # Re-find zero crossings on filtered signal
-                    xc_f, _ = pyaC.zerocross1d(x, y, getIndices=True)
-                    if len(xc_f) < 2:
-                        rho = 0
-                    else:
-                        xc_f_int = np.round(xc_f).astype(int)
-                        xc_f_int = np.clip(xc_f_int, 0, len(y) - 1)
-
-                        n_segments = len(xc_f_int) - 1
-                        total_extremas = 0
-
-                        for i in range(n_segments):
-                            seg = np.abs(y[xc_f_int[i]: xc_f_int[i + 1]])
-                            # Local maxima of |signal|: point greater than both neighbours
-                            for c in range(1, len(seg) - 1):
-                                if seg[c] > seg[c - 1] and seg[c] > seg[c + 1]:
-                                    total_extremas += 1
-
-                        if total_extremas > 0:
-                            rho = min(n_segments / total_extremas, 1.0)
-                        else:
-                            rho = 0
-                except Exception:
-                    rho = 0
-
-                return amplitudes, heights, Tz, rho
+                return amplitudes, heights, Tz
 
             except Exception:
-                return [], [], 10.0, 0
+                return [], [], 10.0
+
+        def calculate_rho(arr, sensor_freq):
+            """
+            rho = n_segments / n_extrema.
+            Segments are half-waves between zero crossings.
+            Extrema = local maxima of |signal| within each segment,
+            counted on a half-Nyquist low-pass filtered version of arr
+            to suppress noise (uses scipy.fftpack.rfftfreq, not np.fft.rfftfreq —
+            they return different length arrays for real FFT).
+            Always computed on the ORIGINAL arr (not spline-interpolated).
+            """
+            from scipy.fftpack import rfft, irfft, rfftfreq
+            from PyAstronomy import pyaC
+
+            try:
+                n = len(arr)
+                spectrum = rfft(arr)
+                # IMPORTANT: scipy.fftpack.rfftfreq returns length-n array
+                # (not n//2+1 like np.fft.rfftfreq) — must use the same module
+                freqs = rfftfreq(n, d=1.0 / sensor_freq)
+                half_nyquist = sensor_freq / 4.0
+                spectrum[freqs > half_nyquist] = 0
+                y = irfft(spectrum)
+
+                x = np.arange(len(y))
+                xc_f, _ = pyaC.zerocross1d(x, y, getIndices=True)
+
+                if len(xc_f) < 2:
+                    return 0
+
+                xc_f_int = np.round(xc_f).astype(int)
+                xc_f_int = np.clip(xc_f_int, 0, len(y) - 1)
+
+                n_segments = len(xc_f_int) - 1
+                total_extremas = 0
+
+                for i in range(n_segments):
+                    seg = np.abs(y[xc_f_int[i]: xc_f_int[i + 1]])
+                    for c in range(1, len(seg) - 1):
+                        if seg[c] > seg[c - 1] and seg[c] > seg[c + 1]:
+                            total_extremas += 1
+
+                if total_extremas > 0:
+                    return min(n_segments / total_extremas, 1.0)
+                else:
+                    return 0
+
+            except Exception:
+                return 0
 
         def calculate_Tz(arr, sensor_freq):
             """Thin wrapper kept for backward compatibility."""
-            _, _, Tz, _ = extract_amplitudes_and_heights(arr, sensor_freq)
+            _, _, Tz = extract_amplitudes_and_heights(arr, sensor_freq)
             return Tz
 
         # Show progress dialog
@@ -4030,10 +4037,13 @@ class Step4ProcessingWindow(QMainWindow):
                 As = 2 * sigma
                 Hs = 4 * sigma
 
-                # Extract amplitudes, heights, Tz and rho from arr_amp in one pass
-                wave_amplitudes, wave_heights, Tz, rho = extract_amplitudes_and_heights(
+                # Extract amplitudes, heights and Tz from arr_amp in one pass
+                wave_amplitudes, wave_heights, Tz = extract_amplitudes_and_heights(
                     arr_amp, amp_sensor_freq
                 )
+
+                # rho always computed on original arr (not spline) with FFT noise filter
+                rho = calculate_rho(arr, sensor_freq)
 
                 kh = kh_solver(depth, Tz)
                 k = kh / depth
