@@ -3233,8 +3233,15 @@ class Step3FourierWindow(QMainWindow):
         ax.axhline(y=0, color='black', linewidth=2, linestyle='-', zorder=10)
 
         ax.set_title('Before/After Fourier Transform', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Date / Time', fontsize=10)
+        ax.set_ylabel('Surface displacement, meters', fontsize=10)
         ax.grid(True, alpha=0.3, zorder=0)
         ax.legend(loc='upper right')
+
+        # Tight x-axis: from first to last timestamp across both datasets
+        x_min = min(data_before['timestamp'].iloc[0], data_transformed_viz['timestamp'].iloc[0])
+        x_max = max(data_before['timestamp'].iloc[-1], data_transformed_viz['timestamp'].iloc[-1])
+        ax.set_xlim(x_min, x_max)
 
         # Format dates
         import matplotlib.dates as mdates
@@ -3256,10 +3263,6 @@ class Step3FourierWindow(QMainWindow):
         layout.addWidget(toolbar)
         layout.addWidget(canvas, stretch=1)
 
-        # Slim bottom bar: Continue button (matches FullDataWindow style)
-        # Continue button — big and prominent
-        btn_continue = QPushButton("▶  Continue to Step 4")
-        # Continue button — big and prominent
         btn_continue = QPushButton("▶  Continue to Step 4")
         btn_continue.setStyleSheet("""
             QPushButton {
@@ -3297,10 +3300,12 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
         progress_dialog.close()
 
-        # Store reference to prevent GC, then show maximized
-        # Step3 stays alive until the user clicks Continue
+        # Store reference to prevent GC, then show maximized.
+        # IMPORTANT: showMaximized() must come BEFORE self.hide() —
+        # Qt exits the event loop if there are no visible windows at any moment.
         QApplication.instance()._comparison_window = comparison_window
         comparison_window.showMaximized()
+        self.hide()
 
     def _build_full_spectrum(self, log_scale: bool):
         """Load Step3_Spectrum.csv and display it in a FullSpectrumWindow."""
@@ -3356,6 +3361,7 @@ class Step4ProcessingWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # Progress indicator
         progress = create_progress_indicator(current_step=4)
@@ -3453,17 +3459,19 @@ class Step4ProcessingWindow(QMainWindow):
         for row in [
             _legend_item("#22c55e", "Processed recording", 'fill'),
             _legend_item("#e74c3c", "Removed recording", 'fill'),
-            _legend_item("#e74c3c", "Spike", 'circle'),
+            _legend_item("#f97316", "Spike", 'circle'),
         ]:
             legend_layout.addLayout(row)
         legend_layout.addStretch()
         controls_layout.addLayout(legend_layout)
 
         controls_group.setLayout(controls_layout)
+        controls_group.setContentsMargins(11, 0, 11, 0)
         layout.addWidget(controls_group)
 
         # Buttons
         btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(11, 0, 11, 8)
 
         self.btn_start = QPushButton("▶  Start Processing")
         self.btn_start.setEnabled(True)  # Always enabled
@@ -3610,7 +3618,7 @@ class Step4ProcessingWindow(QMainWindow):
                 ax.axvline(reading_start, color='gray', linestyle='--',
                            linewidth=0.5, alpha=0.3)
 
-        ax.set_title('Transformed Data (after Fourier Transform, with 20-min reading boundaries)',
+        ax.set_title('Transformed Data (after Fourier Transforms, with 20-min reading boundaries)',
                      fontsize=12, fontweight='bold')
         ax.set_ylabel('Surface displacement, meters', fontsize=10)
         ax.grid(True, alpha=0.3, zorder=0)
@@ -3623,7 +3631,7 @@ class Step4ProcessingWindow(QMainWindow):
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
-        fig.tight_layout(pad=0.5)  # minimal padding so canvas fills full width
+        fig.subplots_adjust(left=0.040, right=0.983, top=0.955, bottom=0.035)
 
         # Store for later access during processing
         self.fig = fig
@@ -4060,7 +4068,7 @@ class Step4ProcessingWindow(QMainWindow):
                         for removed_reading in removed_in_batch:
                             x_rem_start = mdates.date2num(removed_reading['start'])
                             x_rem_end = mdates.date2num(removed_reading['end'])
-                            self.ax.axvspan(x_rem_start, x_rem_end, alpha=0.35, color='red', zorder=3)
+                            self.ax.axvspan(x_rem_start, x_rem_end, alpha=0.2, color='red', zorder=3)
 
                     batch_readings = []
                     removed_in_batch = []
@@ -4084,7 +4092,7 @@ class Step4ProcessingWindow(QMainWindow):
                 self.ax.plot(spike_x, spike_value, 'o',
                              markersize=9,
                              markerfacecolor='none',
-                             markeredgecolor='red',
+                             markeredgecolor='#f97316',
                              markeredgewidth=1.2,
                              linestyle='none',
                              zorder=15)
@@ -4550,11 +4558,6 @@ class PipelineCompleteWindow(QDialog):
                 # Rename
                 output_folder.rename(new_path)
 
-                QMessageBox.information(
-                    self,
-                    "Folder Renamed",
-                    f"Output folder renamed to:\n{new_name}"
-                )
         except Exception as e:
             print(f"Could not rename: {e}")
 
@@ -4590,7 +4593,7 @@ class PipelineCompleteWindow(QDialog):
 
         formats = [
             ("Text (.txt) — tab-separated", "txt"),
-            ("MATLAB (.mat) — scipy.io.savemat", "mat"),
+            ("MATLAB (.mat) — Matlab native file", "mat"),
         ]
         radios = []
         for label, key in formats:
