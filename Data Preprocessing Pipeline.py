@@ -84,7 +84,7 @@ OUTPUT_FOLDER = SCRIPT_DIR / "Output"
 # VISUALIZATION CONFIGURATION
 # ==============================================================================
 # Optimal subsampling for FullHD displays (1920×1080)
-# Based on Nyquist theorem: we need 2-3 points per pixel for smooth zoom
+# Rule of thumb: 2–3 data points per display pixel for smooth zooming
 # Graph width ≈ 1800px → 1800 × 2.5 = 4500 points optimal
 # We use 5000 for safety margin and smooth zooming
 VISUALIZATION_TARGET_POINTS = 5000
@@ -93,8 +93,6 @@ VISUALIZATION_TARGET_POINTS = 5000
 # because frequency domain requires finer resolution
 SPECTRUM_TARGET_POINTS = 100000
 
-
-# ==============================================================================
 
 # ==============================================================================
 # FOOTER FUNCTION FOR ALL WINDOWS
@@ -255,11 +253,9 @@ class ProcessingThread(QThread):
 
     def run(self):
         try:
-            # Step 1: Read INFO file
             self.progress.emit(5, "Reading INFO file...")
             metadata = self.read_info_file()
 
-            # Step 2: Read all data files at once
             self.progress.emit(10, f"Loading {len(self.data_files)} files...")
 
             all_surface_displacement_data = []
@@ -268,22 +264,18 @@ class ProcessingThread(QThread):
                 if self.should_stop:
                     return
 
-                # Read data from file
                 data = self.read_data_file(file_path)
                 all_surface_displacement_data.append(data)
 
-                # Update progress
                 progress_pct = 10 + int((i + 1) / len(self.data_files) * 30)
                 self.progress.emit(progress_pct, f"Loaded {i + 1}/{len(self.data_files)}")
 
             if self.should_stop:
                 return
 
-            # Step 3: Concatenate all data into single array
             self.progress.emit(45, "Combining data...")
             all_data = np.concatenate(all_surface_displacement_data)
 
-            # Step 4: Split into 20-minute readings
             self.progress.emit(50, "Splitting into 20-min readings...")
             points_per_reading = metadata['sensor_frequency'] * 1200
 
@@ -291,20 +283,15 @@ class ProcessingThread(QThread):
             num_complete_readings = len(all_data) // points_per_reading
             all_data = all_data[:num_complete_readings * points_per_reading]
 
-            # Step 5: Create reading numbers (vectorized!)
             self.progress.emit(60, "Creating reading numbers...")
             reading_numbers = np.repeat(np.arange(1, num_complete_readings + 1), points_per_reading)
 
-            # Step 6: Generate timestamps (vectorized!)
             self.progress.emit(70, "Generating timestamps...")
 
-            # Use full datetime from INFO file (date + time), not midnight-truncated date
+            # Use full datetime (date + time of day) to align timestamps correctly with the recording start
             start_time = metadata['dt_start']
 
-            # Calculate frequency in milliseconds
             time_delta_milliseconds = 1000.0 / metadata['sensor_frequency']  # ms per point
-
-            # Create timestamps using milliseconds
             timestamps = pd.date_range(
                 start=start_time,
                 periods=len(all_data),
@@ -326,7 +313,6 @@ class ProcessingThread(QThread):
             last_ts_date = last_ts.date()
             expected_end_date = dt_end.date() if dt_end else None
 
-            # Step 7: Create DataFrame (single operation!)
             self.progress.emit(85, "Creating DataFrame...")
             final_df = pd.DataFrame({
                 'timestamp': timestamps,
@@ -334,7 +320,6 @@ class ProcessingThread(QThread):
                 'reading_number': reading_numbers
             })
 
-            # Add metadata as attributes
             final_df.attrs['description'] = 'Raw data immediately after transfer from .dat files'
             final_df.attrs['sensor_frequency_hz'] = metadata['sensor_frequency']
             final_df.attrs['recording_start'] = str(metadata['date_start'])
@@ -345,12 +330,10 @@ class ProcessingThread(QThread):
             final_df.attrs['last_timestamp_date'] = str(last_ts_date)
             final_df.attrs['expected_end_date'] = str(expected_end_date) if expected_end_date else 'N/A'
 
-            # Step 8: Save to CSV
             self.progress.emit(90, "Saving to CSV file...")
 
-            # Get output path - Output folder next to the script
             output_folder = OUTPUT_FOLDER
-            output_folder.mkdir(exist_ok=True)  # Create if doesn't exist
+            output_folder.mkdir(exist_ok=True)
             output_file = output_folder / "Step1_TXTtoCSV.csv"
 
             # Save with metadata as comments in header
@@ -521,14 +504,12 @@ class ProgressDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Title
         title = QLabel("Processing Wave Data")
         title.setFont(QFont("Segoe UI", 13, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("color: #111827; padding: 8px; letter-spacing: 0.2px;")
         layout.addWidget(title)
 
-        # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
@@ -552,14 +533,12 @@ class ProgressDialog(QDialog):
         """)
         layout.addWidget(self.progress_bar)
 
-        # Status message
         self.status_label = QLabel("Starting...")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet(
             "color: #6b7280; padding: 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(self.status_label)
 
-        # Log window
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(80)
@@ -596,34 +575,28 @@ class MainWindow(QMainWindow):
         """Initialize the main window UI."""
         self.setWindowTitle("Wave data preprocessing pipeline")
 
-        # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Header
         header = QLabel("🌊  Wave Data Preprocessing Pipeline")
         header.setFont(QFont("Segoe UI", 20, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("color: #111827; padding: 24px 20px 6px 20px; letter-spacing: -0.3px;")
         layout.addWidget(header)
 
-        # Instruction
         instruction = QLabel("Load metadata and data files to begin processing")
         instruction.setAlignment(Qt.AlignCenter)
         instruction.setStyleSheet(
             "color: #9ca3af; font-size: 13px; padding-bottom: 16px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(instruction)
 
-        # INFO file section
         info_group = self.create_info_section()
         layout.addWidget(info_group)
 
-        # Data files section
         data_group = self.create_data_section()
         layout.addWidget(data_group)
 
-        # Continue button
         self.btn_continue = QPushButton("▶  Continue to Step 1 — Plot Raw Data")
         self.btn_continue.setEnabled(False)
         self.btn_continue.setStyleSheet("""
@@ -653,7 +626,6 @@ class MainWindow(QMainWindow):
         self.btn_continue.clicked.connect(self.on_continue)
         layout.addWidget(self.btn_continue)
 
-        # Status
         self.status_label = QLabel("Waiting for files...")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet(
@@ -663,11 +635,7 @@ class MainWindow(QMainWindow):
         layout.addStretch()
 
         self.apply_global_styles()
-
-        # Add footer BEFORE showing window
         add_footer(self)
-
-        # Show maximized AFTER UI is fully built
         self.showMaximized()
 
     def create_info_section(self):
@@ -675,7 +643,6 @@ class MainWindow(QMainWindow):
         group = QGroupBox("INFO File")
         layout = QVBoxLayout()
 
-        # Drop zone for INFO
         self.info_drop = FileDropZone(
             "🎯 Drag & Drop INFO.dat file here\nor click button below",
             allowed_extensions=['.dat', '.txt']
@@ -683,7 +650,6 @@ class MainWindow(QMainWindow):
         self.info_drop.files_dropped.connect(self.on_info_dropped)
         layout.addWidget(self.info_drop)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         btn_browse_info = QPushButton("📂 Browse INFO File")
@@ -697,7 +663,6 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(btn_layout)
 
-        # Info about loaded file
         self.info_label = QLabel("No file loaded")
         self.info_label.setStyleSheet(
             "color: #9ca3af; font-style: italic; padding: 5px 8px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
@@ -711,7 +676,6 @@ class MainWindow(QMainWindow):
         group = QGroupBox("Data Files")
         layout = QVBoxLayout()
 
-        # Drop zone for data
         self.data_drop = FileDropZone(
             "🎯 Drag & Drop data files here (.dat, .txt, .npy)\nor click button below",
             allowed_extensions=['.dat', '.txt', '.npy']
@@ -719,7 +683,6 @@ class MainWindow(QMainWindow):
         self.data_drop.files_dropped.connect(self.on_data_dropped)
         layout.addWidget(self.data_drop)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         btn_browse_data = QPushButton("📂 Browse Data Files")
@@ -733,7 +696,6 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(btn_layout)
 
-        # List of loaded files
         self.data_list = QListWidget()
         self.data_list.setMaximumHeight(200)
         self.data_list.setStyleSheet("""
@@ -760,7 +722,6 @@ class MainWindow(QMainWindow):
         """)
         layout.addWidget(self.data_list)
 
-        # File counter
         self.data_count_label = QLabel("Files loaded: 0")
         self.data_count_label.setStyleSheet(
             "color: #9ca3af; padding: 4px 6px; font-size: 12px; font-family: 'Segoe UI', sans-serif;")
@@ -770,18 +731,15 @@ class MainWindow(QMainWindow):
         return group
 
     def on_info_dropped(self, files):
-        """Handle INFO file drop event."""
         if files:
             # Take the first file only
             self.set_info_file(files[0])
 
     def on_data_dropped(self, files):
-        """Handle data files drop event."""
         if files:
             self.add_data_files(files)
 
     def browse_info_file(self):
-        """Browse for INFO file"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select INFO File",
@@ -792,7 +750,6 @@ class MainWindow(QMainWindow):
             self.set_info_file(file_path)
 
     def browse_data_files(self):
-        """Browse for data files"""
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Data Files",
@@ -902,8 +859,7 @@ class MainWindow(QMainWindow):
         }
 
     def add_data_files(self, files):
-        """Add data files"""
-        # Filter duplicates
+        """Add data files to the list, skipping duplicates."""
         new_files = [f for f in files if f not in self.data_files]
 
         if not new_files:
@@ -911,19 +867,16 @@ class MainWindow(QMainWindow):
 
         self.data_files.extend(new_files)
 
-        # Update list
         self.data_list.clear()
         for file_path in self.data_files:
             self.data_list.addItem(Path(file_path).name)
 
-        # Update counter
         self.data_count_label.setText(f"Files loaded: {len(self.data_files)}")
         self.btn_clear_data.setEnabled(True)
 
         self.update_status()
 
     def clear_info(self):
-        """Clear INFO file"""
         self.info_file = None
         self.info_label.setText("No file loaded")
         self.info_label.setStyleSheet(
@@ -932,7 +885,6 @@ class MainWindow(QMainWindow):
         self.update_status()
 
     def clear_data(self):
-        """Clear all data files"""
         self.data_files = []
         self.data_list.clear()
         self.data_count_label.setText("Files loaded: 0")
@@ -940,7 +892,7 @@ class MainWindow(QMainWindow):
         self.update_status()
 
     def update_status(self):
-        """Update status and continue button availability"""
+        """Enable/disable Continue button based on whether both INFO and data files are loaded."""
         if self.info_file and self.data_files:
             self.status_label.setText(f"Ready to process — INFO + {len(self.data_files)} data files loaded")
             self.status_label.setStyleSheet(
@@ -963,16 +915,13 @@ class MainWindow(QMainWindow):
             self.btn_continue.setEnabled(False)
 
     def on_continue(self):
-        """Continue to processing"""
-        # Show progress dialog
+        """Start data processing in a background thread."""
         self.progress_dialog = ProgressDialog(self)
 
-        # Create processing thread
         self.processing_thread = ProcessingThread(self.info_file, self.data_files)
         self.processing_thread.progress.connect(self.progress_dialog.update_progress)
         self.processing_thread.finished.connect(self.on_processing_finished)
 
-        # Start processing
         self.processing_thread.start()
         self.progress_dialog.exec_()
 
@@ -1054,7 +1003,6 @@ class MainWindow(QMainWindow):
             msg.exec_()
 
     def open_visualization_window(self):
-        """Open visualization window"""
         # Create BEFORE closing self — store on QApplication to prevent GC
         viz = VisualizationWindow(self.processed_data)
         QApplication.instance()._viz_window = viz
@@ -1062,7 +1010,6 @@ class MainWindow(QMainWindow):
         self.close()
 
     def apply_global_styles(self):
-        """Apply global stylesheet."""
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f9fafb;
@@ -1127,14 +1074,12 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
 
     data = pd.read_csv(step2_file, comment='#')
 
-    # Step 1: Global mean (Avg_Depth_FullRec)
     progress_bar.setValue(85)
     status.setText("Calculating global average (Avg_Depth_FullRec)...")
     QApplication.processEvents()
 
     avg_depth_full_rec = data['surface_displacement'].mean()
 
-    # Step 2: Per-reading averages
     progress_bar.setValue(88)
     status.setText("Calculating averages for each 20-min reading...")
     QApplication.processEvents()
@@ -1142,7 +1087,6 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
     reading_averages = data.groupby('reading_number')['surface_displacement'].mean().reset_index()
     reading_averages.columns = ['reading_number', 'average_depth']
 
-    # Step 3: Subtract global mean
     progress_bar.setValue(92)
     status.setText("Creating Zero Mean data...")
     QApplication.processEvents()
@@ -1150,7 +1094,6 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
     zero_mean_data = data.copy()
     zero_mean_data['surface_displacement'] = zero_mean_data['surface_displacement'] - avg_depth_full_rec
 
-    # Step 4: Save Step2_Zero_Mean.csv
     progress_bar.setValue(95)
     status.setText("Saving Step2_Zero_Mean.csv...")
     QApplication.processEvents()
@@ -1166,7 +1109,6 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
 
     zero_mean_data.to_csv(zero_mean_file, mode='a', index=False)
 
-    # Step 5: Save subsampled visualization cache
     progress_bar.setValue(96)
     status.setText("Creating Step2_Visualization.csv...")
     QApplication.processEvents()
@@ -1184,7 +1126,6 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
 
     viz_data.to_csv(step2_viz_file, mode='a', index=False)
 
-    # Step 6: Save Parameters.csv
     progress_bar.setValue(98)
     status.setText("Saving Parameters.csv...")
     QApplication.processEvents()
@@ -1213,23 +1154,19 @@ class VisualizationWindow(QMainWindow):
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, self.showMaximized)  # defer until event loop is running
 
-        # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Progress indicator
         progress = create_progress_indicator(current_step=1)
         layout.addWidget(progress)
 
-        # Header
         header = QLabel("Raw Data Visualization")
         header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
-        # Info label
         info_text = (f"Readings: {self.data_df['reading_number'].max()} | "
                      f"Frequency: {self.data_df.attrs.get('sensor_frequency_hz', 'N/A')} Hz")
         info_label = QLabel(info_text)
@@ -1237,7 +1174,6 @@ class VisualizationWindow(QMainWindow):
         info_label.setStyleSheet("color: #6b7280; font-size: 12px; padding: 4px; font-family: 'Consolas', monospace;")
         layout.addWidget(info_label)
 
-        # Plot canvas with interactive toolbar
         from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
         self.canvas = self.create_plot()
         toolbar = NavigationToolbar2QT(self.canvas, self)
@@ -1247,7 +1183,6 @@ class VisualizationWindow(QMainWindow):
         layout.addWidget(toolbar)
         layout.addWidget(self.canvas)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         self.btn_skip = QPushButton("Continue WITHOUT manual removal")
@@ -1298,8 +1233,6 @@ class VisualizationWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
         self.apply_styles()
-
-        # Add footer
         add_footer(self)
 
     def create_plot(self):
@@ -1435,9 +1368,7 @@ class VisualizationWindow(QMainWindow):
 
         # ── BEGINNING LEG ──────────────────────────────────────────────────
         if surface_displacement[0] < 2.0:
-            search_end = min(int(n * 0.4), 4000)
-
-            # True dive entry: large positive gradient AND crosses the 2.0 boundary
+            search_end = min(int(n * 0.4), 4000)  # cap at 4000 samples (~8 min at 8 Hz) to limit search in long recordings
             jump_indices = []
             for i in range(1, search_end):
                 if gradient[i] > threshold:
@@ -1464,7 +1395,7 @@ class VisualizationWindow(QMainWindow):
 
         # ── ENDING LEG ─────────────────────────────────────────────────────
         if surface_displacement[-1] < 2.0:
-            search_start = max(int(n * 0.6), n - 4000)
+            search_start = max(int(n * 0.6), n - 4000)  # cap at 4000 samples (~8 min at 8 Hz)
 
             # True retrieval exit: large negative gradient AND crosses 2.0 boundary
             drop_indices = []
@@ -1504,7 +1435,6 @@ class VisualizationWindow(QMainWindow):
             )
 
     def on_manual_removal(self):
-        """Handle manual removal button click"""
         # Store on app instance to survive self destruction
         _w = ManualRemovalWindow(self.data_df)
         QApplication.instance()._manual_window = _w
@@ -1512,7 +1442,7 @@ class VisualizationWindow(QMainWindow):
         self.close()
 
     def on_skip_removal(self):
-        """Handle skip button click - copy Step1 to Step2 with progress bar and Zero Mean processing"""
+        """Skip manual dive removal: copy Step1 → Step2 as-is, then run zero-mean subtraction."""
         output_folder = OUTPUT_FOLDER
         step1_file = output_folder / "Step1_TXTtoCSV.csv"
         step2_file = output_folder / "Step2_Initial_Cut.csv"
@@ -1542,7 +1472,6 @@ class VisualizationWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
-            # Step 1: Copy file
             progress_bar.setValue(10)
             status.setText("Copying Step1 to Step2...")
             QApplication.processEvents()
@@ -1602,7 +1531,6 @@ class VisualizationWindow(QMainWindow):
             QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
     def apply_styles(self):
-        """Apply global styles"""
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f9fafb;
@@ -1648,23 +1576,19 @@ class ManualRemovalWindow(QMainWindow):
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, self.showMaximized)
 
-        # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Progress indicator
         progress = create_progress_indicator(current_step=2)
         layout.addWidget(progress)
 
-        # Header
         header = QLabel("Manual Dive Section Removal")
         header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
         header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
-        # Instructions
         instructions = QLabel(
             "Double-click on the graph to mark cut point. "
             "Deployment: removes everything BEFORE double-click. "
@@ -1704,7 +1628,6 @@ class ManualRemovalWindow(QMainWindow):
             ending_group.setLayout(ending_layout)
             layout.addWidget(ending_group, stretch=1)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         btn_save = QPushButton("▶  Continue with trimmed data")
@@ -1729,8 +1652,6 @@ class ManualRemovalWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
         self.apply_styles()
-
-        # Add footer
         add_footer(self)
 
     def detect_dive_legs(self):
@@ -1751,7 +1672,7 @@ class ManualRemovalWindow(QMainWindow):
         if len(dive_indices) > 0:
             # Find segments
             diff = np.diff(dive_indices)
-            breaks = np.where(diff > 100)[0]  # Gap > 100 points = different segments
+            breaks = np.where(diff > 100)[0]  # gap > 100 subsampled points (~2% of total) separates beginning/ending legs
 
             if len(breaks) == 0:
                 # Only one segment
@@ -1812,7 +1733,7 @@ class ManualRemovalWindow(QMainWindow):
 
         # ── BEGINNING LEG ──────────────────────────────────────────────────
         if surface_displacement[0] < 2.0:
-            search_end = min(int(n * 0.4), 4000)
+            search_end = min(int(n * 0.4), 4000)  # cap at 4000 samples (~8 min at 8 Hz) to limit search in long recordings
 
             jump_indices = []
             for i in range(1, search_end):
@@ -1836,7 +1757,7 @@ class ManualRemovalWindow(QMainWindow):
 
         # ── ENDING LEG ─────────────────────────────────────────────────────
         if surface_displacement[-1] < 2.0:
-            search_start = max(int(n * 0.6), n - 4000)
+            search_start = max(int(n * 0.6), n - 4000)  # cap at 4000 samples (~8 min at 8 Hz)
 
             drop_indices = []
             for i in range(search_start + 1, n):
@@ -2283,7 +2204,6 @@ class ManualRemovalWindow(QMainWindow):
             QMessageBox.critical(self, 'Error', f'Could not load full data:\n{str(e)}')
 
     def apply_styles(self):
-        """Apply global styles"""
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f9fafb;
@@ -2472,8 +2392,6 @@ class Step3FourierWindow(QMainWindow):
         btn_layout.addWidget(self.btn_continue)
 
         layout.addLayout(btn_layout)
-
-        # Add footer
         add_footer(self)
 
     def load_and_transform(self):
@@ -2592,7 +2510,6 @@ class Step3FourierWindow(QMainWindow):
             status.setText(f"Computing FFT for {len(y):,} points (sensor freq: {sensor_freq} Hz)...")
             QApplication.processEvents()
 
-            # Perform full FFT (two-sided, original approach)
             from scipy.fftpack import fft, fftfreq
 
             s = fft(y)
@@ -2932,7 +2849,7 @@ class Step3FourierWindow(QMainWindow):
             y_transformed = y_padded_back[pad: pad + N]   # strip left and right mirrors
 
             progress_bar.setValue(65)
-            status.setText("Removing edge readings affected by boundary effects...")
+            status.setText("Verifying edge quality (mirror padding applied)...")
             QApplication.processEvents()
 
             # Create transformed dataframe
@@ -3081,7 +2998,6 @@ class Step3FourierWindow(QMainWindow):
 
             # Windowed FFT loop
             for i in range(n):
-                # Update progress
                 if i % 10 == 0:
                     progress_pct = 30 + int((i / n) * 60)
                     progress_bar.setValue(progress_pct)
@@ -3219,12 +3135,12 @@ class Step3FourierWindow(QMainWindow):
 
         ax = fig.add_subplot(111)
 
-        # Plot before (orange, more transparent per your request)
+        # Before: orange, semi-transparent (background layer)
         ax.plot(data_before['timestamp'], data_before['surface_displacement'],
                 linewidth=0.5, color='#fb923c', alpha=0.6, label='Before',
                 marker='o', markersize=1.5, markerfacecolor='#fb923c', markeredgewidth=0, zorder=1)
 
-        # Plot after (blue, less transparent per your request)
+        # After: blue, less transparent (foreground layer)
         ax.plot(data_transformed_viz['timestamp'], data_transformed_viz['surface_displacement'],
                 linewidth=0.5, color=COLORS['wave_data'], alpha=0.7, label='After',
                 marker='o', markersize=1.5, markerfacecolor=COLORS['wave_data'], markeredgewidth=0, zorder=2)
@@ -3286,8 +3202,7 @@ class Step3FourierWindow(QMainWindow):
                 step3_ref = self  # keep Step3 alive until Step4 is ready
                 win = Step4ProcessingWindow()
                 QApplication.instance()._step4_window = win
-                # win.show() is NOT called here — Step4 shows itself after
-                # the graph is fully built inside load_and_visualize()
+                # Step4 calls showMaximized() internally after graph is ready
                 step3_ref.close()
 
             QTimer.singleShot(0, _open_step4)
@@ -3300,9 +3215,7 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
         progress_dialog.close()
 
-        # Store reference to prevent GC, then show maximized.
-        # Step3 stays alive (hidden from user) until _open_step4 closes it
-        # after Step4 is fully initialized.
+        # Keep reference to prevent GC; Step3 closes itself inside _open_step4
         QApplication.instance()._comparison_window = comparison_window
         comparison_window.showMaximized()
 
@@ -3366,7 +3279,6 @@ class Step4ProcessingWindow(QMainWindow):
         progress = create_progress_indicator(current_step=4)
         layout.addWidget(progress)
 
-        # Header
         header = QLabel("Step 4: Data Quality Control & Processing")
         header.setFont(QFont("Segoe UI", 17, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
@@ -3379,15 +3291,12 @@ class Step4ProcessingWindow(QMainWindow):
         self.graph_layout.setSpacing(0)
         layout.addLayout(self.graph_layout)
 
-        # Controls
         controls_group = QGroupBox("Processing Options")
         controls_layout = QVBoxLayout()
 
-        # Checkbox 1: Remove spikes
         self.cb_remove_spikes = QCheckBox("Remove spikes")
         controls_layout.addWidget(self.cb_remove_spikes)
 
-        # Checkbox 2: Remove low RMS recordings
         rms_layout = QHBoxLayout()
         self.cb_remove_low_rms = QCheckBox("Remove recordings with RMS <")
         rms_layout.addWidget(self.cb_remove_low_rms)
@@ -3468,7 +3377,6 @@ class Step4ProcessingWindow(QMainWindow):
         controls_group.setContentsMargins(11, 0, 11, 0)
         layout.addWidget(controls_group)
 
-        # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(11, 0, 11, 8)
 
@@ -3493,8 +3401,6 @@ class Step4ProcessingWindow(QMainWindow):
         btn_layout.addWidget(self.btn_start)
 
         layout.addLayout(btn_layout)
-
-        # Add footer
         add_footer(self)
 
     def load_and_visualize(self):
@@ -3813,8 +3719,7 @@ class Step4ProcessingWindow(QMainWindow):
             try:
                 n = len(arr)
                 spectrum = rfft(arr)
-                # IMPORTANT: scipy.fftpack.rfftfreq returns length-n array
-                # (not n//2+1 like np.fft.rfftfreq) — must use the same module
+                # scipy.fftpack.rfftfreq returns length-n (unlike np.fft.rfftfreq which returns n//2+1)
                 freqs = rfftfreq(n, d=1.0 / sensor_freq)
                 half_nyquist = sensor_freq / 4.0
                 spectrum[freqs > half_nyquist] = 0
@@ -3847,7 +3752,7 @@ class Step4ProcessingWindow(QMainWindow):
                 return 0
 
         def calculate_Tz(arr, sensor_freq):
-            """Thin wrapper kept for backward compatibility."""
+            """Delegates to extract_amplitudes_and_heights; returns only Tz."""
             _, _, Tz = extract_amplitudes_and_heights(arr, sensor_freq)
             return Tz
 
@@ -3905,7 +3810,7 @@ class Step4ProcessingWindow(QMainWindow):
             # Storage for ALL new parameters
             reading_params = []
 
-            # Storage for per-reading amplitudes & heights (Variant B: packed strings)
+            # Per-reading amplitudes and heights, packed as semicolon-separated strings
             all_amplitudes_heights = []
 
             import matplotlib.dates as mdates
@@ -3961,8 +3866,8 @@ class Step4ProcessingWindow(QMainWindow):
                     QApplication.processEvents()
 
                 arr_data = reading_arrays[reading_num]
-                arr = arr_data[
-                    'surface_displacement'].copy()  # .copy() required — arr is modified in-place during spike removal
+                # .copy() is required: arr is modified in-place during spike removal
+                arr = arr_data['surface_displacement'].copy()
                 arr_indices = arr_data['indices']
                 arr_timestamps = arr_data['timestamps']
                 reading_start = arr_data['start']
@@ -4064,6 +3969,8 @@ class Step4ProcessingWindow(QMainWindow):
                     'heights': hgt_str,
                 })
 
+                # rho == 1: pure sinusoid (eps_rho = 0 by definition)
+                # rho == 0: no valid segments; set eps_rho = 0 to avoid meaningless output
                 if rho > 0 and rho < 1:
                     eps_rho = (2 * np.sqrt(1 - rho)) / (2 - rho)
                 else:
@@ -4081,14 +3988,14 @@ class Step4ProcessingWindow(QMainWindow):
                     n_third_amp = len(sorted_amp) // 3
                     As_1_3 = float(np.mean(sorted_amp[:n_third_amp]))
                 else:
-                    As_1_3 = As  # fallback: not enough waves
+                    As_1_3 = As  # fewer than 3 amplitudes — fall back to total As
 
                 if len(wave_heights) >= 3:
                     sorted_hgt = sorted(wave_heights, reverse=True)
                     n_third_hgt = len(sorted_hgt) // 3
                     Hs_1_3 = float(np.mean(sorted_hgt[:n_third_hgt]))
                 else:
-                    Hs_1_3 = Hs  # fallback: not enough waves
+                    Hs_1_3 = Hs  # fewer than 3 heights — fall back to total Hs
 
                 reading_params.append({
                     'reading_number': reading_num,
@@ -4215,7 +4122,7 @@ class Step4ProcessingWindow(QMainWindow):
 
             reading_params_df.to_csv(parameters_updated, mode='a', index=False)
 
-            # Save Amplitudes_Heights.csv (Variant B — packed semicolon strings)
+            # Save Amplitudes_Heights.csv
             amp_hgt_file = output_folder / "Amplitudes_Heights.csv"
             with open(amp_hgt_file, 'w', encoding='utf-8') as f:
                 f.write("# AMPLITUDES & WAVE HEIGHTS — per 20-minute reading\n")
@@ -5048,10 +4955,7 @@ def main():
 
         if reply == QMessageBox.Yes:
             step4_window = Step4ProcessingWindow()
-            app.instance()._step4_window = step4_window  # keep alive — prevent GC
-            # Do NOT call step4_window.show() here — Step4 shows itself via
-            # showMaximized() inside load_and_visualize(), only after the graph
-            # is fully built. Calling show() here would flash a blank window.
+            app.instance()._step4_window = step4_window  # prevent GC; Step4 shows itself after graph is ready
             sys.exit(app.exec_())
         else:
             # User wants to start from scratch — delete all output files
