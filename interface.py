@@ -3200,19 +3200,14 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
 
         # Create new window
-        comparison_window = QDialog(self)
+        comparison_window = QMainWindow(None)
         comparison_window.setWindowTitle("Before/After Comparison")
-        comparison_window.setGeometry(100, 100, 1400, 700)  # Normal size, not maximized
-        comparison_window.setModal(True)
 
-        layout = QVBoxLayout(comparison_window)
-
-        # Header
-        header = QLabel("Fourier Transform Applied — Before vs After")
-        header.setFont(QFont("Segoe UI", 15, QFont.Bold))
-        header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #111827; padding: 12px; letter-spacing: -0.2px;")
-        layout.addWidget(header)
+        _central = QWidget()
+        comparison_window.setCentralWidget(_central)
+        layout = QVBoxLayout(_central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         progress_bar.setValue(70)
         status.setText("Rendering plot...")
@@ -3246,25 +3241,29 @@ class Step3FourierWindow(QMainWindow):
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
-        fig.tight_layout()
+        fig.tight_layout(pad=0.5)
 
         progress_bar.setValue(90)
         status.setText("Finalizing...")
         QApplication.processEvents()
 
+        canvas.setSizePolicy(
+            canvas.sizePolicy().Expanding,
+            canvas.sizePolicy().Expanding,
+        )
         toolbar = NavigationToolbar2QT(canvas, comparison_window)
 
         layout.addWidget(toolbar)
-        layout.addWidget(canvas)
+        layout.addWidget(canvas, stretch=1)
 
-        progress_bar.setValue(100)
-        status.setText("Complete!")
-        QApplication.processEvents()
+        # Slim bottom bar: Continue button (matches FullDataWindow style)
+        bottom_bar = QWidget()
+        bottom_bar.setMaximumHeight(52)
+        bottom_bar.setStyleSheet("background:#f8fafc; border-top:1px solid #e5e7eb;")
+        bar_layout = QHBoxLayout(bottom_bar)
+        bar_layout.setContentsMargins(12, 8, 12, 8)
+        bar_layout.addStretch()
 
-        # Close progress dialog
-        progress_dialog.close()
-
-        # Continue button
         btn_continue = QPushButton("▶  Continue to Step 4")
         btn_continue.setStyleSheet("""
             QPushButton {
@@ -3272,35 +3271,40 @@ class Step3FourierWindow(QMainWindow):
                 color: white;
                 font-size: 14px;
                 font-weight: 600;
-                padding: 13px 20px;
+                padding: 8px 28px;
                 border-radius: 8px;
                 border: none;
                 font-family: 'Segoe UI', sans-serif;
             }
-            QPushButton:hover {
-                background-color: #0284c7;
-            }
+            QPushButton:hover { background-color: #0284c7; }
         """)
 
         def go_to_step4():
-            comparison_window.close()  # ends exec_() → returns below
-            # Defer Step4 creation to AFTER exec_() fully unwinds,
-            # so the Qt event loop is clean before Step3 is destroyed.
+            comparison_window.close()
             from PyQt5.QtCore import QTimer
             def _open_step4():
-                step3_ref = self  # keep Step3 alive a moment longer
                 win = Step4ProcessingWindow()
                 QApplication.instance()._step4_window = win
                 # win.show() is NOT called here — Step4 shows itself after
                 # the graph is fully built inside load_and_visualize()
-                step3_ref.close()
 
             QTimer.singleShot(0, _open_step4)
 
         btn_continue.clicked.connect(go_to_step4)
-        layout.addWidget(btn_continue)
+        bar_layout.addWidget(btn_continue)
+        layout.addWidget(bottom_bar)
 
-        comparison_window.exec_()
+        progress_bar.setValue(100)
+        status.setText("Complete!")
+        QApplication.processEvents()
+        progress_dialog.close()
+
+        # Close Step3 now — comparison window takes over
+        self.close()
+
+        # Store reference to prevent GC, then show maximized
+        QApplication.instance()._comparison_window = comparison_window
+        comparison_window.showMaximized()
 
     def _build_full_spectrum(self, log_scale: bool):
         """Load Step3_Spectrum.csv and display it in a FullSpectrumWindow."""
@@ -4168,6 +4172,7 @@ class Step4ProcessingWindow(QMainWindow):
             _cw = PipelineCompleteWindow(output_folder, stats)
             QApplication.instance()._complete_window = _cw
             _cw.show()
+            self.close()
 
         except Exception as e:
             progress_dialog.close()
