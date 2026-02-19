@@ -2596,7 +2596,7 @@ class Step3FourierWindow(QMainWindow):
             from scipy.fftpack import fft, fftfreq
 
             s = fft(y)
-            x = fftfreq(len(y), (1 / sensor_freq) / (2 * np.pi))  # Angular frequency ω [rad/s]
+            x = fftfreq(len(y), (1 / sensor_freq) / (2 * np.pi))  # Angular frequency ω rad/s
 
             progress_bar.setValue(60)
             status.setText("Saving full spectrum...")
@@ -2712,14 +2712,17 @@ class Step3FourierWindow(QMainWindow):
         ax_top = fig_top.add_subplot(111)
 
         ax_top.plot(freq_viz, s_viz, linewidth=0.8, color=COLORS['spectrum'], alpha=0.9, zorder=2)
-        ax_top.set_xlabel('ω, [rad/s]', fontsize=11)
-        ax_top.set_ylabel('S(ω), [m²/s]', fontsize=11)
+        ax_top.set_xlabel('ω, rad/s', fontsize=11)
+        ax_top.set_ylabel('S(ω), m²/s', fontsize=11)
         ax_top.grid(True, alpha=0.3, zorder=0)
         ax_top.set_xlim(0, 3.0)
         ax_top.set_ylim(0, None)
 
         fig_top.tight_layout()
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
+        lbl_top = QLabel("  ω > 0.1 rad/s")
+        lbl_top.setStyleSheet("color: #9ca3af; font-size: 14px; font-family: 'Segoe UI', sans-serif;")
+        toolbar_top.addWidget(lbl_top)
         full_time_action = QAction('📊 Build full spectrum (slow)', self)
         full_time_action.triggered.connect(self.build_full_spectrum_linear)
         toolbar_top.addAction(full_time_action)
@@ -2732,8 +2735,8 @@ class Step3FourierWindow(QMainWindow):
         ax_bottom = fig_bottom.add_subplot(111)
 
         ax_bottom.plot(freq_zoom, s_zoom, linewidth=0.8, color=COLORS['spectrum'], alpha=0.9, zorder=2)
-        ax_bottom.set_xlabel('ω, [rad/s]', fontsize=11)
-        ax_bottom.set_ylabel('S(ω), [m²/s]', fontsize=11)
+        ax_bottom.set_xlabel('ω, rad/s', fontsize=11)
+        ax_bottom.set_ylabel('S(ω), m²/s', fontsize=11)
         ax_bottom.set_xlim(0, 0.1)
         ax_bottom.grid(True, alpha=0.3, which='both', zorder=0)
         # Log scale — set AFTER plot so matplotlib auto-sets ylim from data (no warning)
@@ -2741,6 +2744,9 @@ class Step3FourierWindow(QMainWindow):
 
         fig_bottom.tight_layout()
         toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
+        lbl_bottom = QLabel("  0 < ω ≤ 0.1 rad/s  |  log scale  |  double-click to set cutoff")
+        lbl_bottom.setStyleSheet("color: #9ca3af; font-size: 14px; font-family: 'Segoe UI', sans-serif;")
+        toolbar_bottom.addWidget(lbl_bottom)
         full_spectrum_action = QAction('📊 Build full spectrum (slow)', self)
         full_spectrum_action.triggered.connect(self.build_full_spectrum)
         toolbar_bottom.addAction(full_spectrum_action)
@@ -2907,7 +2913,7 @@ class Step3FourierWindow(QMainWindow):
             from scipy.fftpack import fft, ifft, fftfreq
 
             s_padded = fft(y_padded)
-            freqs_padded = fftfreq(N_padded, (1 / sensor_freq) / (2 * np.pi))  # ω [rad/s]
+            freqs_padded = fftfreq(N_padded, (1 / sensor_freq) / (2 * np.pi))  # ω rad/s
 
             progress_bar.setValue(40)
             status.setText("Applying frequency filter...")
@@ -3156,8 +3162,8 @@ class Step3FourierWindow(QMainWindow):
 
         # Labels with larger fonts
         ax.tick_params(labelsize=14)
-        ax.set_xlabel('t, [hours]', fontsize=16)
-        ax.set_ylabel('ω, [rad/s]', fontsize=16)
+        ax.set_xlabel('t, hours', fontsize=16)
+        ax.set_ylabel('ω, rad/s', fontsize=16)
 
         fig.tight_layout()
 
@@ -3362,8 +3368,10 @@ class Step4ProcessingWindow(QMainWindow):
         header.setStyleSheet("color: #111827; padding: 14px; letter-spacing: -0.2px;")
         layout.addWidget(header)
 
-        # Graph placeholder
+        # Graph placeholder — no margins so canvas stretches edge to edge
         self.graph_layout = QVBoxLayout()
+        self.graph_layout.setContentsMargins(0, 0, 0, 0)
+        self.graph_layout.setSpacing(0)
         layout.addLayout(self.graph_layout)
 
         # Controls
@@ -3604,6 +3612,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         ax.set_title('Transformed Data (after Fourier Transform, with 20-min reading boundaries)',
                      fontsize=12, fontweight='bold')
+        ax.set_ylabel('Surface displacement, meters', fontsize=10)
         ax.grid(True, alpha=0.3, zorder=0)
 
         # Tight x-axis: first to last timestamp
@@ -3614,7 +3623,7 @@ class Step4ProcessingWindow(QMainWindow):
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
-        fig.tight_layout()
+        fig.tight_layout(pad=0.5)  # minimal padding so canvas fills full width
 
         # Store for later access during processing
         self.fig = fig
@@ -3733,34 +3742,34 @@ class Step4ProcessingWindow(QMainWindow):
             else:
                 eps_width = 0
 
-                # rho - amplitude to extrema ratio
-                # Counts upward zero-crossings to define half-wave segments,
-                # then finds local maxima of |y| within each segment via argrelmax.
-                # Equivalent result to the original but O(N log N) instead of O(N²) —
-                # no array mutation, no PyAstronomy dependency.
-                from scipy.fftpack import irfft
-                from scipy.signal import argrelmax
+            # rho - amplitude to extrema ratio
+            # Counts upward zero-crossings to define half-wave segments,
+            # then finds local maxima of |y| within each segment via argrelmax.
+            # Equivalent result to the original but O(N log N) instead of O(N²) —
+            # no array mutation, no PyAstronomy dependency.
+            from scipy.fftpack import irfft
+            from scipy.signal import argrelmax
 
-                try:
-                    y = irfft(rfft(arr)[ind])
+            try:
+                y = irfft(rfft(arr)[ind])
 
-                    # Upward zero-crossings: signal transitions from negative to positive.
-                    # Exact zeros are treated as positive to avoid double-counting.
-                    signs = np.sign(y)
-                    signs[signs == 0] = 1
-                    zc = np.where((signs[:-1] < 0) & (signs[1:] > 0))[0]
+                # Upward zero-crossings: signal transitions from negative to positive.
+                # Exact zeros are treated as positive to avoid double-counting.
+                signs = np.sign(y)
+                signs[signs == 0] = 1
+                zc = np.where((signs[:-1] < 0) & (signs[1:] > 0))[0]
 
-                    if len(zc) < 2:
-                        rho = 0
-                    else:
-                        amplitudes = len(zc) - 1  # complete half-wave segments
-                        extremas = 0
-                        for i in range(len(zc) - 1):
-                            segment = np.abs(y[zc[i]:zc[i + 1]])
-                            extremas += len(argrelmax(segment)[0])
-                        rho = min(amplitudes / extremas, 1.0) if extremas > 0 else 0
-                except Exception:
+                if len(zc) < 2:
                     rho = 0
+                else:
+                    amplitudes = len(zc) - 1  # complete half-wave segments
+                    extremas = 0
+                    for i in range(len(zc) - 1):
+                        segment = np.abs(y[zc[i]:zc[i + 1]])
+                        extremas += len(argrelmax(segment)[0])
+                    rho = min(amplitudes / extremas, 1.0) if extremas > 0 else 0
+            except Exception:
+                rho = 0
 
             return Q, nu, eps_width, rho
 
@@ -3798,7 +3807,7 @@ class Step4ProcessingWindow(QMainWindow):
 
         # Show progress dialog
         progress_dialog = QDialog(self)
-        progress_dialog.setWindowTitle("Processing Step 3 + Calculating Wave Parameters")
+        progress_dialog.setWindowTitle("Step 4: Processing & Calculating Wave Parameters")
         progress_dialog.setModal(True)
         progress_dialog.setFixedSize(550, 150)
 
@@ -4186,7 +4195,7 @@ class Step4ProcessingWindow(QMainWindow):
             df = pd.read_csv(OUTPUT_FOLDER / 'Step3_Transformed.csv', comment='#')
             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
             progress.close()
-            _w = FullDataWindow(df, 'Step 3: Full Transformed Data')
+            _w = FullDataWindow(df, 'Full Transformed Data')
             self._full_window = _w;
             _w.show()
         except Exception as e:
@@ -4379,10 +4388,10 @@ class FullSpectrumWindow(QMainWindow):
         if self._log_scale:
             f_min        = freq[freq > 0].min() if np.any(freq > 0) else 0
             mask         = freq > f_min
-            title_suffix = "full, log scale, DC removed"
+            title_suffix = "full, log scale"
         else:
-            mask         = freq > 0.05
-            title_suffix = "ω > 0.05, linear scale"
+            mask         = freq > 0.1
+            title_suffix = "ω > 0.1, linear scale"
 
         freq_plot = freq[mask]
         s_plot    = s[mask]
@@ -4391,8 +4400,8 @@ class FullSpectrumWindow(QMainWindow):
         ax.plot(freq_plot, s_plot,
                 linewidth=0.8, color=COLORS['dive_detect'], zorder=2)
 
-        ax.set_xlabel('ω, [rad/s]', fontsize=11)
-        ax.set_ylabel('S(ω), [m²/s]', fontsize=11)
+        ax.set_xlabel('ω, rad/s', fontsize=11)
+        ax.set_ylabel('S(ω), m²/s', fontsize=11)
         ax.set_title(
             f'Full Spectrum — {mask.sum():,} points — {title_suffix}',
             fontsize=13, fontweight='bold',
