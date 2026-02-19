@@ -2718,7 +2718,7 @@ class Step3FourierWindow(QMainWindow):
         ax_top.set_xlim(0, 3.0)
         ax_top.set_ylim(0, None)
 
-        fig_top.tight_layout()
+        fig_top.subplots_adjust(left=0.031, right=0.984, top=1.000, bottom=0.136)
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
         lbl_top = QLabel("  ω > 0.1 rad/s")
         lbl_top.setStyleSheet("color: #9ca3af; font-size: 14px; font-family: 'Segoe UI', sans-serif;")
@@ -2742,7 +2742,7 @@ class Step3FourierWindow(QMainWindow):
         # Log scale — set AFTER plot so matplotlib auto-sets ylim from data (no warning)
         ax_bottom.set_yscale('log')
 
-        fig_bottom.tight_layout()
+        fig_bottom.subplots_adjust(left=0.034, right=0.982, top=1.000, bottom=0.132)
         toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
         lbl_bottom = QLabel("  0 < ω ≤ 0.1 rad/s  |  log scale  |  double-click to set cutoff")
         lbl_bottom.setStyleSheet("color: #9ca3af; font-size: 14px; font-family: 'Segoe UI', sans-serif;")
