@@ -3257,24 +3257,21 @@ class Step3FourierWindow(QMainWindow):
         layout.addWidget(canvas, stretch=1)
 
         # Slim bottom bar: Continue button (matches FullDataWindow style)
-        bottom_bar = QWidget()
-        bottom_bar.setMaximumHeight(52)
-        bottom_bar.setStyleSheet("background:#f8fafc; border-top:1px solid #e5e7eb;")
-        bar_layout = QHBoxLayout(bottom_bar)
-        bar_layout.setContentsMargins(12, 8, 12, 8)
-        bar_layout.addStretch()
-
+        # Continue button — big and prominent
+        btn_continue = QPushButton("▶  Continue to Step 4")
+        # Continue button — big and prominent
         btn_continue = QPushButton("▶  Continue to Step 4")
         btn_continue.setStyleSheet("""
             QPushButton {
                 background-color: #0ea5e9;
                 color: white;
-                font-size: 14px;
+                font-size: 15px;
                 font-weight: 600;
-                padding: 8px 28px;
+                padding: 13px 20px;
                 border-radius: 8px;
                 border: none;
                 font-family: 'Segoe UI', sans-serif;
+                letter-spacing: 0.2px;
             }
             QPushButton:hover { background-color: #0284c7; }
         """)
@@ -3283,26 +3280,25 @@ class Step3FourierWindow(QMainWindow):
             comparison_window.close()
             from PyQt5.QtCore import QTimer
             def _open_step4():
+                step3_ref = self  # keep Step3 alive until Step4 is ready
                 win = Step4ProcessingWindow()
                 QApplication.instance()._step4_window = win
                 # win.show() is NOT called here — Step4 shows itself after
                 # the graph is fully built inside load_and_visualize()
+                step3_ref.close()
 
             QTimer.singleShot(0, _open_step4)
 
         btn_continue.clicked.connect(go_to_step4)
-        bar_layout.addWidget(btn_continue)
-        layout.addWidget(bottom_bar)
+        layout.addWidget(btn_continue)
 
         progress_bar.setValue(100)
         status.setText("Complete!")
         QApplication.processEvents()
         progress_dialog.close()
 
-        # Close Step3 now — comparison window takes over
-        self.close()
-
         # Store reference to prevent GC, then show maximized
+        # Step3 stays alive until the user clicks Continue
         QApplication.instance()._comparison_window = comparison_window
         comparison_window.showMaximized()
 
