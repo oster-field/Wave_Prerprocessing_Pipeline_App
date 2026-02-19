@@ -1,4 +1,7 @@
-PyQt5
-pandas
-numpy
-matplotlib
+matplotlib==3.10.8
+numpy==2.4.2
+pandas==3.0.1
+pyastronomy==0.24.0
+PyQt5==5.15.11
+pyqt5_sip==12.18.0
+scipy==1.17.0

@@ -3733,45 +3733,34 @@ class Step4ProcessingWindow(QMainWindow):
             else:
                 eps_width = 0
 
-            # rho - amplitude to extrema ratio
-            from PyAstronomy import pyaC
-            from scipy.fftpack import irfft
+                # rho - amplitude to extrema ratio
+                # Counts upward zero-crossings to define half-wave segments,
+                # then finds local maxima of |y| within each segment via argrelmax.
+                # Equivalent result to the original but O(N log N) instead of O(N²) —
+                # no array mutation, no PyAstronomy dependency.
+                from scipy.fftpack import irfft
+                from scipy.signal import argrelmax
 
-            try:
-                y = irfft(rfft(arr)[ind])
-                t = np.arange(len(y))
-                tc, ti = pyaC.zerocross1d(t, y, getIndices=True)
+                try:
+                    y = irfft(rfft(arr)[ind])
 
-                tnew = np.sort(np.append(t, tc))
-                for c1 in range(1, len(tnew)):
-                    if tnew[c1] in tc:
-                        tzm1 = np.where(tnew == tnew[c1 - 1])[0]
-                        yzm1 = np.where(y == y[tzm1])[0]
-                        y = np.insert(y, yzm1 + 1, [0])
+                    # Upward zero-crossings: signal transitions from negative to positive.
+                    # Exact zeros are treated as positive to avoid double-counting.
+                    signs = np.sign(y)
+                    signs[signs == 0] = 1
+                    zc = np.where((signs[:-1] < 0) & (signs[1:] > 0))[0]
 
-                amplitudes = 0
-                extremas = 0
-                q = np.arange(0)
-
-                for j in y:
-                    if j == 0:
-                        q = np.abs(q)
-                        q = np.append(q, 0)
-                        amplitudes += 1
-                        for c2 in range(1, len(q) - 1):
-                            if q[c2] > q[c2 - 1] and q[c2] > q[c2 + 1]:
-                                extremas += 1
-                        q = np.arange(0)
-                    q = np.append(q, j)
-
-                if extremas > 0:
-                    rho = amplitudes / extremas
-                    if rho > 1:
-                        rho = 1
-                else:
+                    if len(zc) < 2:
+                        rho = 0
+                    else:
+                        amplitudes = len(zc) - 1  # complete half-wave segments
+                        extremas = 0
+                        for i in range(len(zc) - 1):
+                            segment = np.abs(y[zc[i]:zc[i + 1]])
+                            extremas += len(argrelmax(segment)[0])
+                        rho = min(amplitudes / extremas, 1.0) if extremas > 0 else 0
+                except Exception:
                     rho = 0
-            except Exception:
-                rho = 0
 
             return Q, nu, eps_width, rho
 
