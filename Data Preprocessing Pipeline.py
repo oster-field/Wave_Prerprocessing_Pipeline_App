@@ -4123,20 +4123,26 @@ class Step4ProcessingWindow(QMainWindow):
             reading_params_df.to_csv(parameters_updated, mode='a', index=False)
 
             # Save Amplitudes_Heights.csv
+            progress_bar.setValue(98)
+            status.setText("Saving Amplitudes_Heights.csv...")
+            QApplication.processEvents()
+
             amp_hgt_file = output_folder / "Amplitudes_Heights.csv"
             with open(amp_hgt_file, 'w', encoding='utf-8') as f:
                 f.write("# AMPLITUDES & WAVE HEIGHTS — per 20-minute reading\n")
                 f.write("# ==========================================\n")
                 f.write("# amplitudes: semicolon-separated max|displacement| values\n")
-                f.write("#             between consecutive zero-crossings\n")
+                f.write("#             between consecutive zero-crossings (from arr_amp)\n")
                 f.write("# heights:    semicolon-separated wave heights\n")
-                f.write("#             (sum of two adjacent amplitudes)\n")
-                f.write("# Source: arr_amp (spline-interpolated if enabled, else original)\n")
+                f.write("#             (sum of two adjacent amplitudes, from arr_amp)\n")
+                f.write("# rho computed separately on original arr with half-Nyquist filter\n")
                 f.write("# ==========================================\n")
             amp_hgt_df = pd.DataFrame(all_amplitudes_heights,
                                       columns=['reading_number', 'n_amplitudes',
                                                'n_heights', 'amplitudes', 'heights'])
             amp_hgt_df.to_csv(amp_hgt_file, mode='a', index=False)
+
+            progress_bar.setValue(100)
             status.setText("Complete!")
             QApplication.processEvents()
 
@@ -4493,7 +4499,7 @@ class PipelineCompleteWindow(QDialog):
 
         # ── Buttons ──────────────────────────────────────────────────────────
         # 1. Clear cache
-        btn_cache = QPushButton("🗑  Clear cache  (keep Parameters & Filtered)")
+        btn_cache = QPushButton("🗑  Clear cache")
         btn_cache.setStyleSheet("""
             QPushButton {
                 background:#f3f4f6; color:#374151; font-size:13px;
@@ -4637,12 +4643,48 @@ class PipelineCompleteWindow(QDialog):
 
             src = self.output_folder / fname
             if not src.exists():
-                errors.append(f"{fname} not found");
+                errors.append(f"{fname} not found")
                 continue
             try:
                 df = pd.read_csv(src, comment='#')
                 stem = src.stem
 
+                # ── Special handling for Amplitudes_Heights.csv ──────────────
+                # amplitudes/heights columns are semicolon-packed strings,
+                # not numeric — need to be unpacked per reading.
+                if fname == "Amplitudes_Heights.csv":
+                    if chosen == "txt":
+                        # Write as-is (tab-separated), strings stay intact
+                        out = dest_dir / f"{stem}.txt"
+                        df.to_csv(out, sep='\t', index=False)
+                        exported.append(out.name)
+                    elif chosen == "mat":
+                        from scipy.io import savemat
+                        out = dest_dir / f"{stem}.mat"
+                        mat_dict = {
+                            'reading_number': df['reading_number'].values.astype(float),
+                            'n_amplitudes': df['n_amplitudes'].values.astype(float),
+                            'n_heights': df['n_heights'].values.astype(float),
+                        }
+                        # Each row → variable-length array stored in object array
+                        amp_cell = np.empty(len(df), dtype=object)
+                        hgt_cell = np.empty(len(df), dtype=object)
+                        for i, row in df.iterrows():
+                            try:
+                                amp_cell[i] = np.array([float(v) for v in str(row['amplitudes']).split(';') if v])
+                            except Exception:
+                                amp_cell[i] = np.array([])
+                            try:
+                                hgt_cell[i] = np.array([float(v) for v in str(row['heights']).split(';') if v])
+                            except Exception:
+                                hgt_cell[i] = np.array([])
+                        mat_dict['amplitudes'] = amp_cell
+                        mat_dict['heights'] = hgt_cell
+                        savemat(str(out), mat_dict, do_compression=True)
+                        exported.append(out.name)
+                    continue  # skip generic handling below
+
+                # ── Generic handling for Parameters.csv / Step4_Filtered.csv ─
                 if chosen == "txt":
                     out = dest_dir / f"{stem}.txt"
                     df.to_csv(out, sep='\t', index=False)
