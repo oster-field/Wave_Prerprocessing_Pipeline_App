@@ -307,7 +307,7 @@ class ProcessingThread(QThread):
             dt_end = metadata.get('dt_end')
             if dt_end is not None:
                 delta_seconds = abs((last_ts - dt_end).total_seconds())
-                timestamp_mismatch = delta_seconds > 300  # 5 minutes
+                timestamp_mismatch = delta_seconds > 3600  # 1 hour tolerance
             else:
                 timestamp_mismatch = False
             last_ts_date = last_ts.date()
@@ -327,8 +327,8 @@ class ProcessingThread(QThread):
             final_df.attrs['points_per_reading'] = points_per_reading
             final_df.attrs['total_readings'] = num_complete_readings
             final_df.attrs['timestamp_mismatch'] = timestamp_mismatch
-            final_df.attrs['last_timestamp_date'] = str(last_ts_date)
-            final_df.attrs['expected_end_date'] = str(expected_end_date) if expected_end_date else 'N/A'
+            final_df.attrs['last_timestamp_date'] = last_ts.strftime('%Y-%m-%d  %H:%M:%S')
+            final_df.attrs['expected_end_date'] = dt_end.strftime('%Y-%m-%d  %H:%M:%S') if dt_end else 'N/A'
 
             self.progress.emit(90, "Saving to CSV file...")
 
@@ -3963,8 +3963,7 @@ class Step4ProcessingWindow(QMainWindow):
                 hgt_str = ';'.join(f'{v:.6f}' for v in wave_heights)
                 all_amplitudes_heights.append({
                     'reading_number': reading_num,
-                    'n_amplitudes': len(wave_amplitudes),
-                    'n_heights': len(wave_heights),
+                    'n_waves': len(wave_heights),
                     'amplitudes': amp_str,
                     'heights': hgt_str,
                 })
@@ -4138,8 +4137,8 @@ class Step4ProcessingWindow(QMainWindow):
                 f.write("# rho computed separately on original arr with half-Nyquist filter\n")
                 f.write("# ==========================================\n")
             amp_hgt_df = pd.DataFrame(all_amplitudes_heights,
-                                      columns=['reading_number', 'n_amplitudes',
-                                               'n_heights', 'amplitudes', 'heights'])
+                                      columns=['reading_number', 'n_waves',
+                                               'amplitudes', 'heights'])
             amp_hgt_df.to_csv(amp_hgt_file, mode='a', index=False)
 
             progress_bar.setValue(100)
@@ -4663,8 +4662,7 @@ class PipelineCompleteWindow(QDialog):
                         out = dest_dir / f"{stem}.mat"
                         mat_dict = {
                             'reading_number': df['reading_number'].values.astype(float),
-                            'n_amplitudes': df['n_amplitudes'].values.astype(float),
-                            'n_heights': df['n_heights'].values.astype(float),
+                            'n_waves': df['n_waves'].values.astype(float),
                         }
                         # Each row → variable-length array stored in object array
                         amp_cell = np.empty(len(df), dtype=object)
