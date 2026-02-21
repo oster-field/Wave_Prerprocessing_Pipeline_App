@@ -1,3 +1,8 @@
+import os
+# Limit OpenBLAS/OMP threads — prevents std::bad_alloc in .exe on large FFT arrays
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
+
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
@@ -275,6 +280,8 @@ class ProcessingThread(QThread):
 
             self.progress.emit(45, "Combining data...")
             all_data = np.concatenate(all_surface_displacement_data)
+            del all_surface_displacement_data  # free per-file arrays — all_data holds the merged copy
+            import gc; gc.collect()
 
             self.progress.emit(50, "Splitting into 20-min readings...")
             points_per_reading = metadata['sensor_frequency'] * 1200
@@ -1115,6 +1122,8 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
 
     subsample_step = max(1, len(zero_mean_data) // VISUALIZATION_TARGET_POINTS)
     viz_data = zero_mean_data.iloc[::subsample_step].copy()
+    del zero_mean_data  # full dataset saved to CSV — only viz subsample needed from here
+    import gc; gc.collect()
 
     step2_viz_file = output_folder / "Step2_Visualization.csv"
     with open(step2_viz_file, 'w', encoding='utf-8') as f:
@@ -2534,6 +2543,8 @@ class Step3FourierWindow(QMainWindow):
                 f.write("# ==========================================\n")
 
             spectrum_df.to_csv(step3_spectrum, mode='a', index=False)
+            del spectrum_df  # full spectrum saved to CSV — free ~1.2 GB DataFrame
+            import gc; gc.collect()
 
             self.spectrum_full = s  # complex FFT — used by apply_transform
             self.frequencies_full = x
@@ -2568,6 +2579,8 @@ class Step3FourierWindow(QMainWindow):
                 f.write("# ==========================================\n")
 
             viz_df.to_csv(step3_spectrum_viz, mode='a', index=False)
+            del viz_df  # saved to CSV — free memory
+            gc.collect()
 
             self.frequencies_viz = x_viz
             self.spectrum_viz_real = s_viz.real
@@ -2837,16 +2850,22 @@ class Step3FourierWindow(QMainWindow):
             QApplication.processEvents()
 
             # Zero out frequencies below cutoff (hard zeroing — ringing now absorbed by padding)
-            s_filtered = s_padded.copy()
-            s_filtered[np.abs(freqs_padded) < self.cutoff_freq] = 0j
+            # In-place modification — avoids allocating a second ~1 GB complex array
+            s_padded[np.abs(freqs_padded) < self.cutoff_freq] = 0j
+            del freqs_padded  # no longer needed, free memory before IFFT
 
             progress_bar.setValue(55)
             status.setText("Computing inverse FFT...")
             QApplication.processEvents()
 
             # Inverse FFT → discard padding, keep only the original N samples
-            y_padded_back = ifft(s_filtered).real
+            y_padded_back = ifft(s_padded).real
+            del s_padded  # free ~1 GB complex array immediately
+            import gc; gc.collect()
+
             y_transformed = y_padded_back[pad: pad + N]   # strip left and right mirrors
+            del y_padded_back  # free padded result, keep only the trimmed signal
+            gc.collect()
 
             progress_bar.setValue(65)
             status.setText("Verifying edge quality (mirror padding applied)...")
@@ -2891,6 +2910,8 @@ class Step3FourierWindow(QMainWindow):
             step = max(1, len(data_transformed) // target_points)
 
             data_viz = data_transformed.iloc[::step].copy()
+            del data_transformed  # full dataset saved to CSV — only viz subsample needed
+            gc.collect()
 
             step3_viz_file = output_folder / "Step3_Visualization.csv"
             _viz_sensor_freq = read_sensor_freq_from_csv(output_folder / "Step2_Zero_Mean.csv")
@@ -3724,6 +3745,7 @@ class Step4ProcessingWindow(QMainWindow):
                 half_nyquist = sensor_freq / 4.0
                 spectrum[freqs > half_nyquist] = 0
                 y = irfft(spectrum)
+                del spectrum, freqs  # no longer needed after filtering
 
                 x = np.arange(len(y))
                 xc_f, _ = pyaC.zerocross1d(x, y, getIndices=True)
@@ -4769,12 +4791,22 @@ def clear_output_folder(output_folder):
 
 def main():
     """Launch application"""
+    import signal
+
     app = QApplication(sys.argv)
 
     # Prevent Qt from quitting automatically when the last visible window closes.
     # This is required for transitions where one window hides before the next appears
     # (e.g. Step3 → Before/After comparison → Step4).
     app.setQuitOnLastWindowClosed(False)
+
+    # Ensure the process actually dies when Qt event loop ends.
+    # Without this, background threads keep the .exe alive after the window is closed.
+    app.aboutToQuit.connect(lambda: os._exit(0))
+
+    # Handle Ctrl+C and system termination signals gracefully
+    signal.signal(signal.SIGINT, lambda *args: app.quit())
+    signal.signal(signal.SIGTERM, lambda *args: app.quit())
 
     app.setWindowIcon(QIcon(str(SCRIPT_DIR / 'assets' / 'icon.ico')))
     app.setStyle('Fusion')
