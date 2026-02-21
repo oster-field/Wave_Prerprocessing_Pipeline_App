@@ -20,6 +20,7 @@ env/
 dist/
 build/
 *.spec
+build.bat
 
 # ==============================
 # OS
