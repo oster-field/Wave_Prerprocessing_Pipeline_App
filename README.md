@@ -103,7 +103,7 @@ Files can be drag-and-dropped into the app window or added via the file browser.
 ## Example dataset
 
 A sample deployment record (8 Hz, ~40 days, including storm mode) is available on Kaggle:
-[Wave Pressure Sensor — Example Deployment](https://www.kaggle.com/datasets/...)
+[Wave Pressure Sensor — Example Deployment](https://www.kaggle.com/datasets/andreitregubov/sakhalin-water-surface-displacement-time-series)
 
 Download the `.dat` and `.INFO` files and load them directly into the app to try the full pipeline.
 
