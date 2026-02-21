@@ -21,6 +21,7 @@ dist/
 build/
 *.spec
 build.bat
+installer.iss
 
 # ==============================
 # OS
