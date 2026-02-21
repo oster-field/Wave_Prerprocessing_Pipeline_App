@@ -585,7 +585,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Quit the entire process when the user clicks the X button."""
-        QApplication.quit()
+        if getattr(self, '_closing_by_user', True):
+            QApplication.quit()
         event.accept()
 
     def init_ui(self):
@@ -1024,6 +1025,7 @@ class MainWindow(QMainWindow):
         viz = VisualizationWindow(self.processed_data)
         QApplication.instance()._viz_window = viz
         viz.show()
+        self._closing_by_user = False
         self.close()
 
     def apply_global_styles(self):
@@ -1170,7 +1172,8 @@ class VisualizationWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Quit the entire process when the user clicks the X button."""
-        QApplication.quit()
+        if getattr(self, '_closing_by_user', True):
+            QApplication.quit()
         event.accept()
 
     def init_ui(self):
@@ -1464,6 +1467,7 @@ class VisualizationWindow(QMainWindow):
         _w = ManualRemovalWindow(self.data_df)
         QApplication.instance()._manual_window = _w
         _w.show()
+        self._closing_by_user = False
         self.close()
 
     def on_skip_removal(self):
@@ -1517,6 +1521,7 @@ class VisualizationWindow(QMainWindow):
             _w = Step3FourierWindow()
             QApplication.instance()._step3_window = _w
             _w.show()
+            self._closing_by_user = False
             self.close()
 
         except Exception as e:
@@ -1595,7 +1600,8 @@ class ManualRemovalWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Quit the entire process when the user clicks the X button."""
-        QApplication.quit()
+        if getattr(self, '_closing_by_user', True):
+            QApplication.quit()
         event.accept()
 
     def init_ui(self):
@@ -2195,6 +2201,7 @@ class ManualRemovalWindow(QMainWindow):
             _w = Step3FourierWindow()
             QApplication.instance()._step3_window = _w
             _w.show()
+            self._closing_by_user = False
             self.close()
 
         except Exception as e:
@@ -2291,7 +2298,8 @@ class Step3FourierWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Quit the entire process when the user clicks the X button."""
-        QApplication.quit()
+        if getattr(self, '_closing_by_user', True):
+            QApplication.quit()
         event.accept()
 
     def init_ui(self):
@@ -3251,6 +3259,7 @@ class Step3FourierWindow(QMainWindow):
                 win = Step4ProcessingWindow()
                 QApplication.instance()._step4_window = win
                 # Step4 calls showMaximized() internally after graph is ready
+                step3_ref._closing_by_user = False
                 step3_ref.close()
 
             QTimer.singleShot(0, _open_step4)
@@ -3315,7 +3324,8 @@ class Step4ProcessingWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Quit the entire process when the user clicks the X button."""
-        QApplication.quit()
+        if getattr(self, '_closing_by_user', True):
+            QApplication.quit()
         event.accept()
 
     def init_ui(self):
@@ -4510,7 +4520,8 @@ class PipelineCompleteWindow(QDialog):
 
     def closeEvent(self, event):
         """Quit the entire process when the user clicks the X button."""
-        QApplication.quit()
+        if getattr(self, '_closing_by_user', True):
+            QApplication.quit()
         event.accept()
 
     def _build_ui(self):
