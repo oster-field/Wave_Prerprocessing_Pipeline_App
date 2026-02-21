@@ -78,7 +78,16 @@ plt.rcParams.update({
 # ==============================================================================
 # PATHS
 # ==============================================================================
-SCRIPT_DIR = Path(__file__).parent
+# When running as a PyInstaller .exe, __file__ points to the unpacked temp folder,
+# not the folder where the .exe lives. sys.executable always points to the actual
+# .exe, so we use it to place Output/ next to the executable as expected.
+if getattr(sys, 'frozen', False):
+    # Running as compiled .exe
+    SCRIPT_DIR = Path(sys.executable).parent
+else:
+    # Running as plain .py script
+    SCRIPT_DIR = Path(__file__).parent
+
 OUTPUT_FOLDER = SCRIPT_DIR / "Output"
 
 # ==============================================================================
@@ -573,6 +582,11 @@ class MainWindow(QMainWindow):
         self.info_file = None
         self.data_files = []
         self.init_ui()
+
+    def closeEvent(self, event):
+        """Quit the entire process when the user clicks the X button."""
+        QApplication.quit()
+        event.accept()
 
     def init_ui(self):
         """Initialize the main window UI."""
@@ -1154,6 +1168,11 @@ class VisualizationWindow(QMainWindow):
         self.data_df = data_df
         self.init_ui()
 
+    def closeEvent(self, event):
+        """Quit the entire process when the user clicks the X button."""
+        QApplication.quit()
+        event.accept()
+
     def init_ui(self):
         """Initialize visualization window"""
         self.setWindowTitle("🌊 Wave Data Visualization")
@@ -1573,6 +1592,11 @@ class ManualRemovalWindow(QMainWindow):
         self.cut_lines = {}  # Store cut line references for each graph
         self.shaded_regions = {}  # Store shaded region references
         self.init_ui()
+
+    def closeEvent(self, event):
+        """Quit the entire process when the user clicks the X button."""
+        QApplication.quit()
+        event.accept()
 
     def init_ui(self):
         """Initialize manual removal window"""
@@ -2264,6 +2288,11 @@ class Step3FourierWindow(QMainWindow):
         self.data_step2 = None    # cached Step2_Zero_Mean DataFrame (timestamps + reading_number)
         self.init_ui()
         self.load_and_transform()
+
+    def closeEvent(self, event):
+        """Quit the entire process when the user clicks the X button."""
+        QApplication.quit()
+        event.accept()
 
     def init_ui(self):
         """Initialize Step 3 Fourier window"""
@@ -3283,6 +3312,11 @@ class Step4ProcessingWindow(QMainWindow):
         # only after the graph is fully ready — no blank-window flash.
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, self.load_and_visualize)
+
+    def closeEvent(self, event):
+        """Quit the entire process when the user clicks the X button."""
+        QApplication.quit()
+        event.accept()
 
     def init_ui(self):
         """Initialize Step 4 window"""
@@ -4473,6 +4507,11 @@ class PipelineCompleteWindow(QDialog):
         self.setFixedWidth(460)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._build_ui()
+
+    def closeEvent(self, event):
+        """Quit the entire process when the user clicks the X button."""
+        QApplication.quit()
+        event.accept()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
