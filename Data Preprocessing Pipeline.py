@@ -1,8 +1,4 @@
 import os
-# Limit OpenBLAS/OMP threads — prevents std::bad_alloc in .exe on large FFT arrays
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
-os.environ['OMP_NUM_THREADS'] = '1'
-
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
@@ -1122,6 +1118,7 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
 
     subsample_step = max(1, len(zero_mean_data) // VISUALIZATION_TARGET_POINTS)
     viz_data = zero_mean_data.iloc[::subsample_step].copy()
+    zero_mean_original_len = len(zero_mean_data)
     del zero_mean_data  # full dataset saved to CSV — only viz subsample needed from here
     import gc; gc.collect()
 
@@ -1130,7 +1127,7 @@ def process_zero_mean(step2_file, output_folder, progress_bar, status):
         f.write("# STEP 2: Visualization Cache - Subsampled Zero Mean data\n")
         f.write("# ==========================================\n")
         f.write(f"# Sampled points: {len(viz_data)}\n")
-        f.write(f"# Original points: {len(zero_mean_data)}\n")
+        f.write(f"# Original points: {zero_mean_original_len}\n")
         f.write("# ==========================================\n")
 
     viz_data.to_csv(step2_viz_file, mode='a', index=False)
@@ -2910,6 +2907,7 @@ class Step3FourierWindow(QMainWindow):
             step = max(1, len(data_transformed) // target_points)
 
             data_viz = data_transformed.iloc[::step].copy()
+            data_transformed_len = len(data_transformed)
             del data_transformed  # full dataset saved to CSV — only viz subsample needed
             gc.collect()
 
@@ -2920,7 +2918,7 @@ class Step3FourierWindow(QMainWindow):
                 f.write("# STEP 3: Visualization - Transformed data (subsampled)\n")
                 f.write("# ==========================================\n")
                 f.write(f"# Sampled points: {len(data_viz)}\n")
-                f.write(f"# Original points: {len(data_transformed)}\n")
+                f.write(f"# Original points: {data_transformed_len}\n")
                 f.write(f"# Sensor frequency: {_viz_sensor_freq} Hz\n")
                 f.write("# ==========================================\n")
 
