@@ -78,17 +78,20 @@ plt.rcParams.update({
 # ==============================================================================
 # PATHS
 # ==============================================================================
-# When running as a PyInstaller .exe, __file__ points to the unpacked temp folder,
-# not the folder where the .exe lives. sys.executable always points to the actual
-# .exe, so we use it to place Output/ next to the executable as expected.
 if getattr(sys, 'frozen', False):
-    # Running as compiled .exe
-    SCRIPT_DIR = Path(sys.executable).parent
+    _exe_dir = Path(sys.executable).parent
+    SCRIPT_DIR = _exe_dir
+    try:
+        _test_file = _exe_dir / '.write_test'
+        _test_file.touch()
+        _test_file.unlink()
+        OUTPUT_FOLDER = _exe_dir / "Output"
+    except OSError:
+        _appdata = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+        OUTPUT_FOLDER = _appdata / "WavePreprocessingPipeline" / "Output"
 else:
-    # Running as plain .py script
     SCRIPT_DIR = Path(__file__).parent
-
-OUTPUT_FOLDER = SCRIPT_DIR / "Output"
+    OUTPUT_FOLDER = SCRIPT_DIR / "Output"
 
 # ==============================================================================
 # VISUALIZATION CONFIGURATION
