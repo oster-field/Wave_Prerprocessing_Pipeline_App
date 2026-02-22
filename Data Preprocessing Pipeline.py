@@ -349,7 +349,7 @@ class ProcessingThread(QThread):
             self.progress.emit(90, "Saving to CSV file...")
 
             output_folder = OUTPUT_FOLDER
-            output_folder.mkdir(exist_ok=True)
+            output_folder.mkdir(parents=True, exist_ok=True)
             output_file = output_folder / "Step1_TXTtoCSV.csv"
 
             # Save with metadata as comments in header
