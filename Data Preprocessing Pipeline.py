@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog,
                              QListWidget, QGroupBox, QMessageBox, QDialog,
                              QProgressBar, QTextEdit, QCheckBox, QLineEdit,
-                             QSpinBox, QRadioButton, QAction)
+                             QSpinBox, QRadioButton, QAction, QScrollArea)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent, QIcon
 from pathlib import Path
@@ -141,16 +141,17 @@ def create_progress_indicator(current_step):
     ]
 
     widget = QWidget()
-    widget.setFixedHeight(45)
+    _ind_h = max(36, int(QApplication.primaryScreen().availableGeometry().height() * 0.042))
+    widget.setFixedHeight(_ind_h)
     layout = QHBoxLayout(widget)
-    layout.setContentsMargins(20, 5, 20, 5)
+    layout.setContentsMargins(20, 4, 20, 4)
     layout.setSpacing(8)
 
     layout.addStretch()
 
     for i, (icon, name) in enumerate(steps):
         step_container = QWidget()
-        step_container.setFixedSize(100, 32)
+        step_container.setFixedSize(100, max(26, _ind_h - 8))
         step_layout = QHBoxLayout(step_container)
         step_layout.setContentsMargins(6, 4, 6, 4)
         step_layout.setSpacing(4)
@@ -463,7 +464,9 @@ class FileDropZone(QLabel):
         self.allowed_extensions = allowed_extensions or []
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignCenter)
-        self.setMinimumHeight(120)
+        # Adaptive: ~10% of screen height, min 70px
+        _sh = QApplication.primaryScreen().availableGeometry().height()
+        self.setMinimumHeight(max(70, int(_sh * 0.10)))
         self.setStyleSheet("""
             QLabel {
                 border: 2px dashed #cbd5e1;
@@ -512,7 +515,8 @@ class ProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Processing Data")
         self.setModal(True)
-        self.setFixedSize(500, 250)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        self.resize(min(500, int(_scr.width() * 0.9)), min(250, int(_scr.height() * 0.9)))
 
         layout = QVBoxLayout(self)
 
@@ -593,20 +597,39 @@ class MainWindow(QMainWindow):
         """Initialize the main window UI."""
         self.setWindowTitle("Wave data preprocessing pipeline")
 
+        # Compute scale factor once; stored on self so child methods can reuse it.
+        # Base reference is 1920x1080. On a 1366x768 laptop scale ≈ 0.71.
+        screen = QApplication.primaryScreen().availableGeometry()
+        self._sw = screen.width()
+        self._sh = screen.height()
+        self._scale = min(self._sw / 1920, self._sh / 1080)
+
+        # Wrap content in QScrollArea so nothing is cut off on small screens
         central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(central_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setCentralWidget(scroll_area)
+
         layout = QVBoxLayout(central_widget)
+        s = self._scale
+        layout.setContentsMargins(int(24*s), int(16*s), int(24*s), int(16*s))
+        layout.setSpacing(int(10*s))
 
         header = QLabel("🌊  Wave Data Preprocessing Pipeline")
-        header.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        header.setFont(QFont("Segoe UI", max(13, int(20 * s)), QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #111827; padding: 24px 20px 6px 20px; letter-spacing: -0.3px;")
+        header.setStyleSheet(
+            f"color: #111827; padding: {int(24*s)}px 20px {int(6*s)}px 20px; letter-spacing: -0.3px;")
         layout.addWidget(header)
 
         instruction = QLabel("Load metadata and data files to begin processing")
         instruction.setAlignment(Qt.AlignCenter)
         instruction.setStyleSheet(
-            "color: #9ca3af; font-size: 13px; padding-bottom: 16px; font-family: 'Segoe UI', sans-serif;")
+            f"color: #9ca3af; font-size: {max(10, int(13*s))}px; "
+            f"padding-bottom: {int(16*s)}px; font-family: 'Segoe UI', sans-serif;")
         layout.addWidget(instruction)
 
         info_group = self.create_info_section()
@@ -715,7 +738,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_layout)
 
         self.data_list = QListWidget()
-        self.data_list.setMaximumHeight(200)
+        # Adaptive: ~18% of screen height; min 100px for very small screens
+        self.data_list.setMaximumHeight(max(100, int(self._sh * 0.18)))
         self.data_list.setStyleSheet("""
             QListWidget {
                 border: 1px solid #e5e7eb;
@@ -1176,6 +1200,16 @@ class VisualizationWindow(QMainWindow):
             QApplication.quit()
         event.accept()
 
+    def resizeEvent(self, event):
+        """Re-run tight_layout whenever window is resized (including first show)."""
+        super().resizeEvent(event)
+        if hasattr(self, 'canvas') and self.canvas is not None:
+            try:
+                self.canvas.figure.tight_layout()
+                self.canvas.draw_idle()
+            except Exception:
+                pass
+
     def init_ui(self):
         """Initialize visualization window"""
         self.setWindowTitle("🌊 Wave Data Visualization")
@@ -1349,8 +1383,7 @@ class VisualizationWindow(QMainWindow):
         ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
         fig.autofmt_xdate()
 
-        fig.tight_layout()
-
+        # tight_layout deferred to resizeEvent — canvas has no size yet.
         return canvas
 
     def detect_dives(self, surface_displacement, sensitivity=3.0):
@@ -1480,7 +1513,8 @@ class VisualizationWindow(QMainWindow):
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Processing Data")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
 
         layout = QVBoxLayout(progress_dialog)
 
@@ -1541,7 +1575,8 @@ class VisualizationWindow(QMainWindow):
         progress = QDialog(self);
         progress.setWindowTitle('Loading Full Data')
         progress.setModal(True);
-        progress.setFixedSize(400, 100)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress.resize(min(400, int(_scr.width() * 0.85)), min(100, int(_scr.height() * 0.4)))
         _l = QVBoxLayout(progress);
         _l.addWidget(QLabel('Loading Step1_TXTtoCSV.csv...'))
         pb = QProgressBar();
@@ -1603,6 +1638,18 @@ class ManualRemovalWindow(QMainWindow):
         if getattr(self, '_closing_by_user', True):
             QApplication.quit()
         event.accept()
+
+    def resizeEvent(self, event):
+        """Re-run tight_layout on both canvases when window resizes."""
+        super().resizeEvent(event)
+        for attr in ('beginning_canvas', 'ending_canvas'):
+            canvas = getattr(self, attr, None)
+            if canvas is not None:
+                try:
+                    canvas.figure.tight_layout()
+                    canvas.draw_idle()
+                except Exception:
+                    pass
 
     def init_ui(self):
         """Initialize manual removal window"""
@@ -1936,7 +1983,7 @@ class ManualRemovalWindow(QMainWindow):
 
         canvas.mpl_connect('button_press_event', on_click)  # dblclick fires button_press_event with event.dblclick=True
 
-        fig.tight_layout()
+        # tight_layout deferred to resizeEvent — canvas has no size yet.
 
         # Add navigation toolbar for zoom/pan
         toolbar = NavigationToolbar2QT(canvas, self)
@@ -2055,7 +2102,8 @@ class ManualRemovalWindow(QMainWindow):
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Saving Trimmed Data")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
 
         layout = QVBoxLayout(progress_dialog)
 
@@ -2221,7 +2269,8 @@ class ManualRemovalWindow(QMainWindow):
         progress = QDialog(self);
         progress.setWindowTitle('Loading Full Data')
         progress.setModal(True);
-        progress.setFixedSize(400, 100)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress.resize(min(400, int(_scr.width() * 0.85)), min(100, int(_scr.height() * 0.4)))
         _l = QVBoxLayout(progress);
         _l.addWidget(QLabel('Loading Step2_Initial_Cut.csv...'))
         pb = QProgressBar();
@@ -2302,6 +2351,18 @@ class Step3FourierWindow(QMainWindow):
             QApplication.quit()
         event.accept()
 
+    def resizeEvent(self, event):
+        """Re-run tight_layout on spectrum figures when window resizes."""
+        super().resizeEvent(event)
+        for attr in ('canvas_top', 'canvas_bottom'):
+            canvas = getattr(self, attr, None)
+            if canvas is not None:
+                try:
+                    canvas.figure.tight_layout(pad=0.5)
+                    canvas.draw_idle()
+                except Exception:
+                    pass
+
     def init_ui(self):
         """Initialize Step 3 Fourier window"""
         self.setWindowTitle("🌊 Step 3: Fourier Transform")
@@ -2325,7 +2386,8 @@ class Step3FourierWindow(QMainWindow):
                 border-radius: 8px;
             }
         """)
-        top_card.setFixedHeight(56)
+        top_card.setFixedHeight(
+            max(44, int(QApplication.primaryScreen().availableGeometry().height() * 0.052)))
         top_bar = QHBoxLayout(top_card)
         top_bar.setContentsMargins(16, 0, 16, 0)
         top_bar.setSpacing(8)
@@ -2451,7 +2513,8 @@ class Step3FourierWindow(QMainWindow):
             progress_dialog = QDialog(None)
             progress_dialog.setWindowTitle("Loading Cached Spectrum")
             progress_dialog.setModal(True)
-            progress_dialog.setFixedSize(500, 150)
+            _scr = QApplication.primaryScreen().availableGeometry()
+            progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
             progress_dialog.setWindowFlags(
                 progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
             )
@@ -2509,7 +2572,8 @@ class Step3FourierWindow(QMainWindow):
         progress_dialog = QDialog(None)
         progress_dialog.setWindowTitle("Computing Fourier Transform")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
         progress_dialog.setWindowFlags(
             progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
         )
@@ -2682,7 +2746,7 @@ class Step3FourierWindow(QMainWindow):
         ax_top.set_xlim(0, 3.0)
         ax_top.set_ylim(0, None)
 
-        fig_top.subplots_adjust(left=0.031, right=0.984, top=1.000, bottom=0.136)
+        # tight_layout deferred to resizeEvent — canvas has no size yet.
         toolbar_top = NavigationToolbar2QT(canvas_top, self)
         lbl_top = QLabel("  ω > 0.1 rad/s")
         lbl_top.setStyleSheet("color: #9ca3af; font-size: 14px; font-family: 'Segoe UI', sans-serif;")
@@ -2706,7 +2770,7 @@ class Step3FourierWindow(QMainWindow):
         # Log scale — set AFTER plot so matplotlib auto-sets ylim from data (no warning)
         ax_bottom.set_yscale('log')
 
-        fig_bottom.subplots_adjust(left=0.034, right=0.982, top=1.000, bottom=0.132)
+        # tight_layout deferred to resizeEvent — canvas has no size yet.
         toolbar_bottom = NavigationToolbar2QT(canvas_bottom, self)
         lbl_bottom = QLabel("  0 < ω ≤ 0.1 rad/s  |  log scale  |  double-click to set cutoff")
         lbl_bottom.setStyleSheet("color: #9ca3af; font-size: 14px; font-family: 'Segoe UI', sans-serif;")
@@ -2810,7 +2874,8 @@ class Step3FourierWindow(QMainWindow):
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Applying Transform")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
 
         layout = QVBoxLayout(progress_dialog)
 
@@ -2993,7 +3058,8 @@ class Step3FourierWindow(QMainWindow):
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Computing Spectrogram")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
 
         layout = QVBoxLayout(progress_dialog)
 
@@ -3107,7 +3173,8 @@ class Step3FourierWindow(QMainWindow):
 
         layout = QVBoxLayout(spectrogram_window)
 
-        fig = Figure(figsize=(16, 10), dpi=100)
+        # constrained_layout=True: matplotlib recalculates margins at every draw().
+        fig = Figure(figsize=(16, 10), dpi=100, constrained_layout=True)
         canvas = FigureCanvas(fig)
         ax = fig.add_subplot(111)
 
@@ -3137,7 +3204,7 @@ class Step3FourierWindow(QMainWindow):
         ax.set_xlabel('t, hours', fontsize=16)
         ax.set_ylabel('ω, rad/s', fontsize=16)
 
-        fig.tight_layout()
+        # tight_layout not needed — constrained_layout=True handles it.
 
         # Add toolbar
         toolbar = NavigationToolbar2QT(canvas, spectrogram_window)
@@ -3186,7 +3253,8 @@ class Step3FourierWindow(QMainWindow):
         QApplication.processEvents()
 
         # Create plot
-        fig = Figure(figsize=(14, 6), dpi=100)
+        # constrained_layout=True: auto-adjusts margins at every draw.
+        fig = Figure(figsize=(14, 6), dpi=100, constrained_layout=True)
         canvas = FigureCanvas(fig)
 
         ax = fig.add_subplot(111)
@@ -3220,7 +3288,7 @@ class Step3FourierWindow(QMainWindow):
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
-        fig.tight_layout(pad=0.5)
+        # tight_layout not needed — constrained_layout=True handles it.
 
         progress_bar.setValue(90)
         status.setText("Finalizing...")
@@ -3281,7 +3349,8 @@ class Step3FourierWindow(QMainWindow):
         progress = QDialog(self)
         progress.setWindowTitle('Loading Full Spectrum')
         progress.setModal(True)
-        progress.setFixedSize(400, 100)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress.resize(min(400, int(_scr.width() * 0.85)), min(100, int(_scr.height() * 0.4)))
         _l = QVBoxLayout(progress)
         _l.addWidget(QLabel('Loading Step3_Spectrum.csv...'))
         pb = QProgressBar()
@@ -3327,6 +3396,17 @@ class Step4ProcessingWindow(QMainWindow):
         if getattr(self, '_closing_by_user', True):
             QApplication.quit()
         event.accept()
+
+    def resizeEvent(self, event):
+        """Keep tight_layout correct when the window is resized."""
+        super().resizeEvent(event)
+        canvas = getattr(self, 'canvas', None)
+        if canvas is not None:
+            try:
+                canvas.figure.tight_layout(pad=0.4)
+                canvas.draw_idle()
+            except Exception:
+                pass
 
     def init_ui(self):
         """Initialize Step 4 window"""
@@ -3476,7 +3556,8 @@ class Step4ProcessingWindow(QMainWindow):
         progress_dialog = QDialog(None)
         progress_dialog.setWindowTitle("Opening Step 4...")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(500, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(500, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
         progress_dialog.setWindowFlags(
             progress_dialog.windowFlags() | Qt.WindowStaysOnTopHint
         )
@@ -3599,8 +3680,6 @@ class Step4ProcessingWindow(QMainWindow):
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m %H:%M'))
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=9)
 
-        fig.subplots_adjust(left=0.040, right=0.983, top=0.955, bottom=0.035)
-
         # Store for later access during processing
         self.fig = fig
         self.ax = ax
@@ -3618,6 +3697,10 @@ class Step4ProcessingWindow(QMainWindow):
 
         self.graph_layout.addWidget(toolbar)
         self.graph_layout.addWidget(canvas, stretch=1)
+
+        # tight_layout AFTER addWidget — canvas now has a real size from the layout.
+        fig.tight_layout(pad=0.4)
+        canvas.draw_idle()
 
     def start_processing(self):
         """
@@ -3824,7 +3907,8 @@ class Step4ProcessingWindow(QMainWindow):
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Step 4: Processing & Calculating Wave Parameters")
         progress_dialog.setModal(True)
-        progress_dialog.setFixedSize(550, 150)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress_dialog.resize(min(550, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
 
         layout = QVBoxLayout(progress_dialog)
 
@@ -4249,7 +4333,8 @@ class Step4ProcessingWindow(QMainWindow):
         progress = QDialog(self);
         progress.setWindowTitle('Loading Full Data')
         progress.setModal(True);
-        progress.setFixedSize(400, 100)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        progress.resize(min(400, int(_scr.width() * 0.85)), min(100, int(_scr.height() * 0.4)))
         _l = QVBoxLayout(progress);
         _l.addWidget(QLabel('Loading Step3_Transformed.csv...'))
         pb = QProgressBar();
@@ -4514,7 +4599,9 @@ class PipelineCompleteWindow(QDialog):
         self.output_folder = Path(output_folder)
         self.stats = stats
         self.setWindowTitle("🎉 Pipeline Complete")
-        self.setFixedWidth(460)
+        _scr_w = QApplication.primaryScreen().availableGeometry().width()
+        self.setMinimumWidth(320)
+        self.resize(min(460, int(_scr_w * 0.85)), self.sizeHint().height())
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._build_ui()
 
@@ -4651,7 +4738,8 @@ class PipelineCompleteWindow(QDialog):
         """Export Step4_Filtered.csv and Parameters.csv in chosen format."""
         fmt_dialog = QDialog(self)
         fmt_dialog.setWindowTitle("Export format")
-        fmt_dialog.setFixedWidth(320)
+        fmt_dialog.setMinimumWidth(260)
+        fmt_dialog.resize(min(320, int(QApplication.primaryScreen().availableGeometry().width() * 0.85)), fmt_dialog.sizeHint().height())
         fl = QVBoxLayout(fmt_dialog)
         fl.addWidget(QLabel("Choose export format:"))
 
@@ -4691,7 +4779,8 @@ class PipelineCompleteWindow(QDialog):
         prog = QDialog(self)
         prog.setWindowTitle("Exporting…")
         prog.setModal(True)
-        prog.setFixedSize(420, 110)
+        _scr = QApplication.primaryScreen().availableGeometry()
+        prog.resize(min(420, int(_scr.width() * 0.9)), min(110, int(_scr.height() * 0.4)))
         _pl = QVBoxLayout(prog)
         prog_lbl = QLabel("Preparing…")
         prog_lbl.setAlignment(Qt.AlignCenter)
@@ -4840,6 +4929,11 @@ def clear_output_folder(output_folder):
 def main():
     """Launch application"""
     import signal
+
+    # HiDPI support — must be set BEFORE QApplication is created
+    os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
 
     app = QApplication(sys.argv)
 
@@ -5168,7 +5262,8 @@ def main():
                 progress_dialog = QDialog()
                 progress_dialog.setWindowTitle("Loading Data")
                 progress_dialog.setModal(True)
-                progress_dialog.setFixedSize(400, 150)
+                _scr = QApplication.primaryScreen().availableGeometry()
+                progress_dialog.resize(min(400, int(_scr.width() * 0.9)), min(150, int(_scr.height() * 0.5)))
 
                 layout = QVBoxLayout(progress_dialog)
 
